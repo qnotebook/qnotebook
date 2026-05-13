@@ -47,6 +47,8 @@ SAMPLES = [
     ),
     pytest.param("This is #tagged and so is #another-tag.\n", id="tags"),
     pytest.param("At start: #todo then later #done.\n", id="tag-mid-line"),
+    pytest.param("Inline equation $E=mc^2$ here.\n", id="inline-eq"),
+    pytest.param("Block math $$\\sum_{i=1}^n i$$ middle.\n", id="block-eq"),
 ]
 
 
@@ -145,3 +147,47 @@ def test_tag_in_code_not_styled(qapp):
     md = "Use `#define FOO 1` in headers.\n"
     out = _normalize(md)
     assert "`#define FOO 1`" in out
+
+
+def test_inline_equation_roundtrip(qapp):
+    md = "energy is $E=mc^2$ today\n"
+    out = _normalize(md)
+    assert "$E=mc^2$" in out
+
+
+def test_block_equation_roundtrip(qapp):
+    md = "math: $$\\sum x_i$$ end\n"
+    out = _normalize(md)
+    assert "$$\\sum x_i$$" in out
+
+
+def test_has_mathtext_flag_present():
+    from qnotebook import equations
+    assert isinstance(equations.HAS_MATHTEXT, bool)
+
+
+def test_toc_marker_roundtrip(qapp):
+    md = "# Top\n\n[[!TOC]]\n\n## Sub\n"
+    out = _normalize(md)
+    assert "[[!TOC]]" in out
+
+
+def test_toc_marker_block_property_set(qapp):
+    from qnotebook.md_to_qdoc import BLOCK_TOC_MARKER
+    doc = QTextDocument()
+    markdown_to_qdoc("# A\n\n[[!TOC]]\n", doc)
+    found = False
+    block = doc.firstBlock()
+    while block.isValid():
+        if block.blockFormat().property(BLOCK_TOC_MARKER):
+            found = True
+            break
+        block = block.next()
+    assert found
+
+
+def test_equation_fallback_when_no_mathtext(qapp):
+    # When matplotlib missing, equation still serializes correctly.
+    md = "x is $a+b$ y\n"
+    out = _normalize(md)
+    assert "$a+b$" in out

@@ -11,6 +11,7 @@ from .md_to_qdoc import (
     BLOCK_LIST_KIND,
     BLOCK_ORDERED_START,
     BLOCK_TASK_STATE,
+    BLOCK_TOC_MARKER,
     CHAR_CODE,
     CHAR_IMAGE_ALT,
     CHAR_WIKILINK,
@@ -40,6 +41,14 @@ def qdoc_to_markdown(doc: QTextDocument) -> str:
 
         fmt = block.blockFormat()
         kind = fmt.property(BLOCK_KIND) or "p"
+
+        # TOC marker block
+        if fmt.property(BLOCK_TOC_MARKER):
+            _ensure_blank(out, last_kind)
+            out.append("[[!TOC]]")
+            last_kind = "p"
+            i += 1
+            continue
 
         # Handle code-block runs: group consecutive "code" blocks into one fence
         if kind == "code":
@@ -167,6 +176,11 @@ def _emit_inline(block: QTextBlock, in_table_header: bool = False) -> str:
 
 
 def _emit_fragment(text: str, fmt, in_table_header: bool = False) -> str:
+    # Equation fragment: round-trips back to `$..$` / `$$..$$`.
+    from .equations import serialize_equation_fragment
+    eq = serialize_equation_fragment(fmt)
+    if eq is not None:
+        return eq
     # Image fragment: QTextImageFormat has a non-empty name().
     if fmt.isImageFormat():
         name = fmt.toImageFormat().name()

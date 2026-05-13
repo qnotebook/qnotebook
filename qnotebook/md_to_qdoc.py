@@ -44,6 +44,7 @@ CHAR_WIKILINK = QTextCharFormat.Property.UserProperty + 10  # str target
 CHAR_CODE = QTextCharFormat.Property.UserProperty + 11  # bool
 CHAR_IMAGE_ALT = QTextCharFormat.Property.UserProperty + 12  # str alt text for images
 CHAR_TAG = QTextCharFormat.Property.UserProperty + 13  # str tag name (e.g. "todo" for `#todo`)
+BLOCK_TOC_MARKER = QTextCharFormat.Property.UserProperty + 14  # bool: this paragraph is a [[!TOC]] marker
 
 IMAGE_MAX_WIDTH = 600
 
@@ -138,6 +139,8 @@ class _InlineStyle:
     tag: str | None = None  # when set, this run is a `#tag` token
     image_src: str | None = None  # if set, this run is an image insertion
     image_alt: str = ""
+    equation: str | None = None  # if set, this run is a LaTeX equation
+    equation_display: bool = False  # True for `$$..$$`
 
     def char_format(self) -> QTextCharFormat:
         f = QTextCharFormat()
@@ -166,6 +169,12 @@ class _InlineStyle:
             f.setForeground(QColor("#1c71d8"))
             f.setFontWeight(QFont.Weight.DemiBold)
             f.setProperty(CHAR_TAG, self.tag)
+        if self.equation is not None:
+            from .equations import EQ_LATEX, EQ_DISPLAY
+            f.setFontFamilies(["monospace"])
+            f.setBackground(QColor("#fff8dc"))
+            f.setProperty(EQ_LATEX, self.equation)
+            f.setProperty(EQ_DISPLAY, bool(self.equation_display))
         return f
 
 
@@ -321,14 +330,58 @@ def _emit_with_tags(out: list[tuple[str, _InlineStyle]], text: str, style: _Inli
     pos = 0
     for m in TAG_INLINE_RE.finditer(text):
         if m.start() > pos:
-            out.append((text[pos : m.start()], style))
+            _emit_with_equations(out, text[pos : m.start()], style)
         tag_token = m.group(1)  # includes the leading `#`
         s = _InlineStyle(**style.__dict__)
         s.tag = tag_token[1:]
         out.append((tag_token, s))
         pos = m.end()
     if pos < len(text):
+        _emit_with_equations(out, text[pos:], style)
+
+
+def _emit_with_equations(out: list[tuple[str, _InlineStyle]], text: str, style: _InlineStyle) -> None:
+    """Emit text, splitting LaTeX `$..$` and `$$..$$` runs."""
+    from .equations import find_equations_in_text
+    eqs = find_equations_in_text(text)
+    if not eqs:
+        out.append((text, style))
+        return
+    pos = 0
+    for s, e, latex, display in eqs:
+        if s > pos:
+            out.append((text[pos:s], style))
+        st = _InlineStyle(**style.__dict__)
+        st.equation = latex
+        st.equation_display = display
+        out.append((text[s:e], st))
+        pos = e
+    if pos < len(text):
         out.append((text[pos:], style))
+
+
+_TOC_SENTINEL = "QNOTEBOOKTOCMARKERLINE"
+
+
+def _preprocess_toc_markers(md_text: str) -> str:
+    """Replace standalone `[[!TOC]]` lines with a plain-text sentinel that
+    survives markdown-it (so we can post-tag the block)."""
+    out_lines: list[str] = []
+    in_fence = False
+    for line in (md_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if not in_fence and stripped == "[[!TOC]]":
+            out_lines.append(_TOC_SENTINEL)
+        else:
+            out_lines.append(line)
+    out = "\n".join(out_lines)
+    if md_text.endswith("\n"):
+        out += "\n"
+    return out
 
 
 def markdown_to_qdoc(md_text: str, doc: QTextDocument, base_path: Path | None = None) -> None:
@@ -347,6 +400,7 @@ def markdown_to_qdoc(md_text: str, doc: QTextDocument, base_path: Path | None = 
     md = MarkdownIt("commonmark", {"html": False, "breaks": False, "linkify": False}).enable(
         ["table", "strikethrough"]
     )
+    md_text = _preprocess_toc_markers(md_text or "")
     tokens = md.parse(md_text or "")
     r = _Renderer(doc, base_path=base_path)
 
@@ -548,6 +602,30 @@ def markdown_to_qdoc(md_text: str, doc: QTextDocument, base_path: Path | None = 
             continue
         # Unknown / close tokens
         i += 1
+
+    _post_process_toc_markers(doc)
+
+
+def _post_process_toc_markers(doc: QTextDocument) -> None:
+    """Find blocks containing the TOC sentinel; tag with BLOCK_TOC_MARKER and
+    replace the sentinel text with a styled `[[!TOC]]` placeholder."""
+    block = doc.firstBlock()
+    while block.isValid():
+        if block.text().strip() == _TOC_SENTINEL:
+            cur = QTextCursor(block)
+            cur.select(QTextCursor.SelectionType.BlockUnderCursor)
+            cur.removeSelectedText()
+            # After removeSelectedText the block may have collapsed; re-fetch.
+            cur = QTextCursor(doc)
+            cur.setPosition(block.position())
+            bf = block.blockFormat()
+            bf.setProperty(BLOCK_TOC_MARKER, True)
+            cur.setBlockFormat(bf)
+            cf = QTextCharFormat()
+            cf.setForeground(QColor("#1a5fb4"))
+            cf.setFontItalic(True)
+            cur.insertText("[[!TOC]]", cf)
+        block = block.next()
 
 
 def _list_item_block_format(depth: int, is_task: bool, task_state: int) -> QTextBlockFormat:

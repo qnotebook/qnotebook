@@ -6,7 +6,7 @@
 files on disk. Heavily inspired by Zim Desktop Wiki, but written from scratch — no code shared,
 Python + PyQt6 + `markdown-it-py`.
 
-## Scope (v0.5)
+## Scope (v0.5.0 — wave 3 complete)
 
 - Open a notebook: any directory with `.md` files.
 - Tree of pages with lazy-loaded children (directory hierarchy).
@@ -223,23 +223,81 @@ spans. Rebuilt on notebook open; incrementally updated on save.
   with a language tag. Colors are applied per fragment, serialization
   still round-trips to the same fence + content.
 
-## Explicitly deferred features (wave 3+)
+## Features added in v0.5 (wave 3)
 
-- **Plugins**: no plugin architecture yet. The journal/calendar is a
-  built-in, not a plugin.
+- **Quick switcher** (`qnotebook/quickswitcher.py`): Ctrl+P opens a modal
+  fuzzy-match page picker. Ctrl+Shift+P now maps to Print (was Ctrl+P).
+  Scoring: basename-prefix > basename-contains > full-path-contains
+  > subsequence with contiguous-match bonus.
+- **Page History viewer** (`qnotebook/history_viewer.py`): View → Page
+  History... Lists `git log --follow` for the current page; click a
+  commit → unified diff vs current; "Restore this version" writes the
+  old text back as a new edit (with confirmation). Uses
+  `versioning.page_history` and `versioning.page_at_revision`.
+- **Live reparse for markdown links + images**: `live_reparse.py` now
+  styles `[text](url)` (blue underline anchor) and `![alt](path)`
+  (purple highlight). Only triggers on closed forms (presence of `)`).
+- **LaTeX equations** (`qnotebook/equations.py`): inline `$..$` and block
+  `$$..$$` round-trip through the qdoc via `EQ_LATEX` / `EQ_DISPLAY`
+  char properties (UserProperty+20/+21). With matplotlib mathtext,
+  equations render as PNG images in the doc resource table; without
+  (`HAS_MATHTEXT=False`), they fall back to monospace styling. Source
+  text is always preserved.
+- **Plugin architecture** (`qnotebook/plugins/__init__.py`): discovers
+  `Plugin` classes from `qnotebook/plugins/builtin/*.py` AND
+  `<notebook>/.qnotebook/plugins/*.py`. Plugins menu lists them with
+  enable checkboxes (persisted in `QSettings["plugins_enabled"]`).
+  Bundled built-ins: `journal_plugin`, `linkmap_plugin` (thin wrappers
+  exposing existing docks under Plugins menu) and `word_of_the_day`
+  (status-bar widget showing total notebook word count).
+- **Dark mode**: View → Dark Mode toggle (persisted). Applies a Qt
+  Fusion dark palette + dark editor stylesheet (`#1e1e1e` bg,
+  `#d4d4d4` text, links `#9cdcfe`).
+- **Per-notebook export CSS**: `<notebook>/.qnotebook/export.css` (falls
+  back to `DEFAULT_CSS`). File → Export → "Edit Export CSS..." opens an
+  editor; HTML exports use it automatically.
+- **Page Properties dialog**: tree right-click → Properties shows file
+  path, size, ctime, mtime, word/char counts, inbound link count, tags.
+  `MainWindow.page_properties(page)` returns the metadata as a dict.
+- **Spell context menu wiring**: when spell available, right-click a
+  misspelled word for top-5 suggestions, "Add to dictionary" (persisted
+  in `<notebook>/.qnotebook/dictionary.txt`), "Ignore once" / "Ignore in
+  this notebook".
+- **Inline TOC marker**: a line containing only `[[!TOC]]` is parsed
+  into a paragraph block tagged with `BLOCK_TOC_MARKER` (UserProperty+14)
+  and styled italic-blue. On serialize the marker round-trips back to
+  `[[!TOC]]`. See `_preprocess_toc_markers` (sentinel-based to bypass
+  markdown-it's wikilink consumption).
+- **Quick note (Ctrl+Alt+N)**: tiny modal that appends
+  `## YYYY-MM-DD HH:MM:SS\n<text>` to a `Scratch` page (created on first
+  use). `MainWindow.append_to_scratch(text)` is the public entry point.
+- **Customize Shortcuts dialog**: File → Customize Shortcuts... lists
+  every `QAction` and lets you rebind. Persisted in
+  `QSettings["shortcuts"]` (dict label → key text).
+  `apply_custom_shortcuts()` runs at startup.
+- **Multi-hop link map + force layout**: link map dock has a Hops
+  spinner (1–3). With networkx (`HAS_NETWORKX`), positions come from
+  `nx.spring_layout`; without, falls back to circular layout. Multi-hop
+  uses BFS over forward + backward links.
+- **Outline view** (alternative tree): View → "Show: Recent List" swaps
+  the tree's model for a flat list of pages sorted by mtime
+  (most-recent first). Mutually exclusive with "Show: Page Tree".
+
+## Explicitly deferred features (wave 4+)
+
 - **mdit-py-plugins tasklist extension.** We still detect `[ ]` / `[x]`
   ourselves on the first text token of a bullet-list item.
-- **Advanced link map**: only 1-hop; no zoom/pan UX, no force-directed
-  layout, no clustering.
-- **Spell-check context menu**: the `SpellHighlighter` exposes
-  `suggestions()` / `add_to_dictionary()` / `ignore_word()`, but those
-  aren't yet wired into the editor's context menu.
-- **Version-history browsing/rollback UI**: commits happen in the
-  background but there's no in-app history viewer (use `git log`
-  externally).
-- **Live reparse for markdown links `[text](url)` and images**: live
-  reparse only handles inline emphasis / code / wikilinks / tags. Links
-  and images still require a save+load round-trip to re-render.
+- **Force-directed layout polish**: spring layout uses a fixed seed; no
+  animated relaxation, no per-edge weights, no clustering.
+- **Equation editor UX**: no toolbar button to insert `$..$`; rendering
+  is load-time only (typing in the LaTeX in the editor doesn't refresh
+  the PNG until the next load).
+- **Plugin sandboxing**: user plugins from `<notebook>/.qnotebook/plugins/`
+  execute with full Python privileges — treat untrusted notebooks
+  accordingly.
+- **TOC marker as live anchor list**: the `[[!TOC]]` block is currently
+  a styled placeholder (round-trips, but does not regenerate a clickable
+  list of headings inside the document — the TOC dock fills that role).
 
 ## Build / test commands
 
@@ -385,6 +443,63 @@ No GObject, no GTK, no `pyxdg`.
   no-op (`is_active()` returns False), the View menu toggle is disabled,
   and the spell test suite skips its two real tests. Currently enchant
   is NOT installed in the dev environment — those tests skip.
+
+## Wave-3 gotchas
+
+- **Ctrl+P shortcut moved.** Quick switcher took Ctrl+P; Print is now
+  Ctrl+Shift+P. Tests / docs that reference the old binding need to be
+  updated.
+- **TOC marker pre-processing.** `[[!TOC]]` matches `WIKILINK_RE` and
+  would otherwise be consumed as a wikilink with target `!TOC`. The
+  pre-processor replaces the literal line with `QNOTEBOOKTOCMARKERLINE`
+  before handing to markdown-it, then post-processes the resulting block
+  to set `BLOCK_TOC_MARKER` and re-insert the styled `[[!TOC]]` text.
+  Lines inside fenced code are left alone.
+- **Equations on inline parser.** `$..$` and `$$..$$` are detected in
+  `_emit_with_equations` (called from the same pipeline as wikilinks /
+  tags). Block equations are matched first (greedy `$$..$$`) so they
+  don't get mangled by inline `$..$` matching.
+- **Equation property numbers.** `EQ_LATEX = UserProperty+20`, `EQ_DISPLAY = UserProperty+21`.
+  These intentionally sit above the existing `BLOCK_*` / `CHAR_*` slots
+  to leave room for incremental additions.
+- **Plugin discovery is best-effort.** Import errors in a plugin module
+  silently skip that plugin (no traceback). `Plugin()` constructor that
+  raises is also skipped. This keeps a broken plugin from blocking the
+  whole window.
+- **Built-in plugins are no-op duplicates** of journal / linkmap. They
+  add a Plugins-menu entry that toggles the same dock the View menu
+  toggles. Rationale: keep existing tests / wiring untouched while
+  validating the plugin loader; switching to plugin-only would have been
+  a riskier refactor.
+- **Word-of-the-day plugin** scans every page on save by listening to
+  `editor.dirtyChanged(False)` (since saving clears dirty). It also
+  refreshes on a 15s timer. For huge notebooks this is O(N) per save —
+  cache or move to a worker thread before deploying on real-world data.
+- **Page History viewer** uses unit-separator `\x1f` between log
+  fields (`%H%x1f%ad%x1f%s`) so commit subjects with arbitrary
+  punctuation don't break parsing.
+- **History restore** writes via the normal `notebook.save_page` →
+  `index.update_page` → `_maybe_versioning_commit` path, so the restored
+  state itself becomes a new commit (no force-push semantics).
+- **Live reparse `MD_LINK_RE`.** Built lazily via `__import__("re")` to
+  avoid pulling re into the module's top-level imports twice. Matches
+  full `[text](url)` and `![alt](url)`; mid-typing the URL (no closing
+  `)`) leaves the run plain.
+- **Custom shortcuts** apply BEFORE notebook open (called in
+  `__init__`). If the user later rebinds via the dialog, the change
+  takes effect immediately on the live `QAction`.
+- **Outline mode swaps `tree.setModel`** to a `QStandardItemModel`. The
+  original `PageTreeModel` is kept on `self.model`; switching back is a
+  cheap reassignment. `_on_tree_clicked` checks `tree.model() is self.model`
+  to decide which path to use.
+- **Dark mode applies app-wide palette** (not just the editor). Switching
+  off restores the default `QPalette()` — which loses platform-specific
+  customizations. If your tests assert specific colors, run them after
+  toggling dark mode off and forcing a `processEvents`.
+- **Optional deps and HAS_X flags.** `HAS_MATHTEXT` (matplotlib),
+  `HAS_NETWORKX`, `HAS_ENCHANT`. All three default to graceful fallbacks
+  in this dev environment (none installed). Tests that exercise the rich
+  path are gated with `pytest.mark.skipif`.
 
 ## Key design decisions
 

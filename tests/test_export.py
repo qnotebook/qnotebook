@@ -6,8 +6,11 @@ import pytest
 
 from qnotebook.notebook import Notebook
 from qnotebook.export import (
+    DEFAULT_CSS,
     export_page_html,
     export_notebook_html,
+    load_notebook_css,
+    save_notebook_css,
     _preprocess_wikilinks_and_tags,
 )
 
@@ -117,3 +120,18 @@ def test_preprocess_skips_code_spans():
     result = _preprocess_wikilinks_and_tags(md, None, {"Y"})
     assert "`[[X]]`" in result
     assert 'href="Y.html"' in result
+
+
+def test_load_notebook_css_falls_back_to_default(nb, tmp_path: Path):
+    css = load_notebook_css(nb)
+    assert css == DEFAULT_CSS
+
+
+def test_save_notebook_css_then_export_uses_custom(nb, tmp_path: Path):
+    save_notebook_css(nb, "body { color: limegreen; }")
+    custom = load_notebook_css(nb)
+    assert "limegreen" in custom
+    out = tmp_path / "h.html"
+    export_page_html(nb, "Home", out, css=custom)
+    body = out.read_text(encoding="utf-8")
+    assert "limegreen" in body

@@ -257,6 +257,103 @@ def test_recent_notebooks_tracked(qapp, tmp_notebook, qtbot):
     assert str(tmp_notebook.resolve()) in [r for r in recents]
 
 
+def test_page_properties_returns_metadata(win):
+    info = win.page_properties("Home")
+    assert info["path"] == "Home"
+    assert info["size"] > 0
+    assert info["words"] > 0
+    assert info["chars"] > 0
+    assert "ctime" in info and info["ctime"]
+
+
+def test_page_properties_inbound_links(win):
+    # Home is linked from Sub:Child
+    info = win.page_properties("Home")
+    assert info["inbound"] >= 1
+
+
+def test_page_properties_tags_extracted(win, tmp_notebook: Path):
+    (tmp_notebook / "Tagged.md").write_text("# T\n\n#alpha and #beta\n", encoding="utf-8")
+    win.index.update_page("Tagged")
+    info = win.page_properties("Tagged")
+    assert "alpha" in info["tags"]
+    assert "beta" in info["tags"]
+
+
+def test_outline_mode_switches_to_recent(win, qapp):
+    win._set_outline_mode("recent")
+    assert win.outline_mode() == "recent"
+    m = win.tree.model()
+    assert m is not win.model
+    assert m.rowCount() >= 1
+
+
+def test_outline_mode_switch_back_to_tree(win, qapp):
+    win._set_outline_mode("recent")
+    win._set_outline_mode("tree")
+    assert win.outline_mode() == "tree"
+    assert win.tree.model() is win.model
+
+
+def test_set_action_shortcut_persists(win, qapp):
+    win.set_action_shortcut("Save", "Ctrl+Shift+S")
+    s = QSettings("qnotebook", "qnotebook")
+    raw = s.value("shortcuts", {}, type=dict) or {}
+    assert raw.get("Save") == "Ctrl+Shift+S"
+    assert win.act_save.shortcut().toString() == "Ctrl+Shift+S"
+
+
+def test_custom_shortcut_loads_on_startup(qapp, tmp_notebook, qtbot):
+    s = QSettings("qnotebook", "qnotebook")
+    s.setValue("shortcuts", {"Save": "Ctrl+Alt+S"})
+    s.sync()
+    w = MainWindow()
+    w.open_notebook(str(tmp_notebook))
+    qtbot.addWidget(w)
+    assert w.act_save.shortcut().toString() == "Ctrl+Alt+S"
+
+
+def test_quick_note_appends_to_scratch(win, tmp_notebook: Path):
+    win.append_to_scratch("Hello world")
+    assert win.notebook.exists("Scratch")
+    text = win.notebook.get_page("Scratch")
+    assert "Hello world" in text
+
+
+def test_quick_note_appends_with_timestamp(win):
+    page = win.append_to_scratch("note one")
+    assert page == "Scratch"
+    win.append_to_scratch("note two")
+    text = win.notebook.get_page("Scratch")
+    # Both appended; two timestamp headers
+    assert text.count("## ") >= 2
+    assert "note one" in text and "note two" in text
+
+
+def test_dark_mode_toggle_applies_palette(win, qapp):
+    win.act_dark.setChecked(True)
+    qapp.processEvents()
+    s = QSettings("qnotebook", "qnotebook")
+    assert bool(s.value("dark_mode", False, type=bool))
+    sheet = win.editor.styleSheet()
+    assert "#1e1e1e" in sheet
+    win.act_dark.setChecked(False)
+    qapp.processEvents()
+    assert win.editor.styleSheet() == ""
+
+
+def test_dark_mode_persists_across_open(qapp, tmp_notebook, qtbot):
+    s = QSettings("qnotebook", "qnotebook")
+    s.setValue("dark_mode", True)
+    s.sync()
+    w = MainWindow()
+    w.open_notebook(str(tmp_notebook))
+    qtbot.addWidget(w)
+    qapp.processEvents()
+    assert w.act_dark.isChecked()
+    assert "#1e1e1e" in w.editor.styleSheet()
+
+
 def test_save_atomic_write(win, tmp_notebook):
     win.load_page("Home")
     from PyQt6.QtGui import QTextCursor

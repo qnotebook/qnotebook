@@ -470,5 +470,51 @@ class MarkdownEditor(QTextEdit):
 
     # ---- smoke helpers for tests ----
 
+    # ---- context menu / spell ----
+
+    def contextMenuEvent(self, e):  # noqa: N802
+        menu = self.createStandardContextMenu()
+        sh = getattr(self, "_spell_highlighter", None)
+        if sh is not None and sh.is_active():
+            cur = self.cursorForPosition(e.pos())
+            cur.select(QTextCursor.SelectionType.WordUnderCursor)
+            word = cur.selectedText()
+            if word and not self._is_word_correct(word, sh):
+                from PyQt6.QtGui import QAction
+                menu.addSeparator()
+                sugs = sh.suggestions(word, n=5)
+                for sug in sugs:
+                    act = QAction(sug, menu)
+                    act.triggered.connect(
+                        lambda _checked=False, c=cur, s=sug: self._replace_word(c, s)
+                    )
+                    menu.addAction(act)
+                menu.addSeparator()
+                add = QAction("Add to dictionary", menu)
+                add.triggered.connect(lambda: sh.add_to_dictionary(word))
+                menu.addAction(add)
+                ig_once = QAction("Ignore once", menu)
+                ig_once.triggered.connect(lambda: None)  # session no-op
+                menu.addAction(ig_once)
+                ig_nb = QAction("Ignore in this notebook", menu)
+                ig_nb.triggered.connect(lambda: sh.ignore_word(word))
+                menu.addAction(ig_nb)
+        menu.exec(e.globalPos())
+
+    def _is_word_correct(self, word: str, sh) -> bool:
+        try:
+            return sh._dict.check(word) if sh._dict else True
+        except Exception:
+            return True
+
+    def _replace_word(self, cursor, replacement: str) -> None:
+        cursor.insertText(replacement)
+        self.setTextCursor(cursor)
+
+    def attach_spell_highlighter(self, sh) -> None:
+        """Lets MainWindow tell the editor about the spell highlighter so the
+        context menu can offer suggestions."""
+        self._spell_highlighter = sh
+
     def heading_level_at_cursor(self) -> int:
         return int(self.textCursor().blockFormat().property(BLOCK_LEVEL) or 0)

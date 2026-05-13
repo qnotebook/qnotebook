@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_menus()
         self._build_toolbar()
+        self.apply_custom_shortcuts()
 
         path = notebook_path or self._settings.value("last_notebook", type=str)
         if path:
@@ -418,6 +419,7 @@ class MainWindow(QMainWindow):
         from .linkmap import LinkMapDock
         self.linkmap_widget = LinkMapDock(self)
         self.linkmap_widget.set_on_navigate(self.load_page)
+        self.linkmap_widget.set_on_hops_changed(lambda _h: self._refresh_linkmap())
         linkmap_dock = QDockWidget("Link Map", self)
         linkmap_dock.setWidget(self.linkmap_widget)
         linkmap_dock.setAllowedAreas(
@@ -574,8 +576,22 @@ class MainWindow(QMainWindow):
         self.act_toggle_versioning.triggered.connect(self._toggle_versioning)
 
         self.act_print = QAction("&Print...", self)
-        self.act_print.setShortcut(QKeySequence("Ctrl+P"))
+        self.act_print.setShortcut(QKeySequence("Ctrl+Shift+P"))
         self.act_print.triggered.connect(self._print_current_page)
+
+        self.act_page_history = QAction("Page &History...", self)
+        self.act_page_history.triggered.connect(self._open_page_history)
+
+        self.act_quick_note = QAction("&Quick Note", self)
+        self.act_quick_note.setShortcut(QKeySequence("Ctrl+Alt+N"))
+        self.act_quick_note.triggered.connect(self._open_quick_note)
+
+        self.act_quick_switch = QAction("&Quick Switch...", self)
+        self.act_quick_switch.setShortcut(QKeySequence("Ctrl+P"))
+        self.act_quick_switch.triggered.connect(self._open_quick_switcher)
+
+        self.act_shortcuts = QAction("Customize Shortcuts...", self)
+        self.act_shortcuts.triggered.connect(self._open_shortcut_editor)
 
         self.act_quit = QAction("&Quit", self)
         self.act_quit.setShortcut(QKeySequence.StandardKey.Quit)
@@ -596,10 +612,16 @@ class MainWindow(QMainWindow):
         self.m_export.addAction(self.act_export_page_html)
         self.m_export.addAction(self.act_export_notebook_html)
         self.m_export.addAction(self.act_export_page_pdf)
+        self.m_export.addSeparator()
+        act_css = QAction("Edit Export &CSS...", self)
+        act_css.triggered.connect(self._edit_export_css)
+        self.m_export.addAction(act_css)
         m_file.addSeparator()
         m_file.addAction(self.act_print)
         m_file.addSeparator()
         m_file.addAction(self.act_toggle_versioning)
+        m_file.addSeparator()
+        m_file.addAction(self.act_shortcuts)
         m_file.addSeparator()
         m_file.addAction(self.act_quit)
         m_edit = mb.addMenu("&Edit")
@@ -607,6 +629,8 @@ class MainWindow(QMainWindow):
         m_edit.addAction(self.act_find_next)
         m_edit.addAction(self.act_find_prev)
         m_edit.addAction(self.act_search)
+        m_edit.addAction(self.act_quick_switch)
+        m_edit.addAction(self.act_quick_note)
         m_edit.addSeparator()
         m_insert = mb.addMenu("&Insert")
         m_insert.addAction(self.act_insert_image)
@@ -633,6 +657,26 @@ class MainWindow(QMainWindow):
         self.act_toggle_linkmap = QAction("&Link Map", self, checkable=True)
         self.act_toggle_linkmap.triggered.connect(self._toggle_linkmap_dock)
         m_view.addAction(self.act_toggle_linkmap)
+        m_view.addAction(self.act_page_history)
+        m_view.addSeparator()
+        from PyQt6.QtGui import QActionGroup
+        self.act_view_tree = QAction("Show: Page &Tree", self, checkable=True)
+        self.act_view_recent = QAction("Show: &Recent List", self, checkable=True)
+        grp = QActionGroup(self)
+        grp.setExclusive(True)
+        grp.addAction(self.act_view_tree)
+        grp.addAction(self.act_view_recent)
+        self.act_view_tree.setChecked(True)
+        self.act_view_tree.triggered.connect(lambda: self._set_outline_mode("tree"))
+        self.act_view_recent.triggered.connect(lambda: self._set_outline_mode("recent"))
+        m_view.addAction(self.act_view_tree)
+        m_view.addAction(self.act_view_recent)
+        m_view.addSeparator()
+        self.act_dark = QAction("&Dark Mode", self, checkable=True)
+        self.act_dark.toggled.connect(self._toggle_dark_mode)
+        m_view.addAction(self.act_dark)
+        if bool(self._settings.value("dark_mode", False, type=bool)):
+            self.act_dark.setChecked(True)
         self.act_toggle_spell = QAction("&Spell Check", self, checkable=True)
         self.act_toggle_spell.setEnabled(HAS_ENCHANT)
         self.act_toggle_spell.triggered.connect(self._toggle_spell_check)
@@ -643,6 +687,7 @@ class MainWindow(QMainWindow):
             self.act_toggle_spell.setChecked(True)
             self._toggle_spell_check(True)
         self.m_view = m_view
+        self.m_plugins = mb.addMenu("&Plugins")
         m_fmt = mb.addMenu("F&ormat")
         m_fmt.addAction(self.act_bold)
         m_fmt.addAction(self.act_italic)
@@ -686,6 +731,46 @@ class MainWindow(QMainWindow):
         if path:
             self.open_notebook(path)
 
+    def _setup_plugins(self) -> None:
+        """Discover plugins, populate Plugins menu, activate enabled ones."""
+        from . import plugins as plugins_mod
+        # Reset plugins menu
+        if hasattr(self, "m_plugins"):
+            self.m_plugins.clear()
+        infos = plugins_mod.discover(
+            self.notebook.root if self.notebook is not None else None
+        )
+        self._plugin_infos = infos
+        enabled_raw = self._settings.value("plugins_enabled", [], type=list) or []
+        enabled = set(str(x) for x in enabled_raw)
+        for info in infos:
+            act = QAction(f"{info.name}", self)
+            act.setCheckable(True)
+            act.setChecked(info.key in enabled)
+            act.setToolTip(info.description)
+            act.toggled.connect(
+                lambda checked, key=info.key: self._toggle_plugin(key, checked)
+            )
+            self.m_plugins.addAction(act)
+        plugins_mod.setup_enabled(self, infos, enabled)
+
+    def _toggle_plugin(self, key: str, enabled: bool) -> None:
+        raw = self._settings.value("plugins_enabled", [], type=list) or []
+        cur = set(str(x) for x in raw)
+        if enabled:
+            cur.add(key)
+            # Activate immediately if discovered
+            for info in getattr(self, "_plugin_infos", []):
+                if info.key == key:
+                    try:
+                        info.plugin.setup(self)
+                    except Exception:
+                        pass
+                    break
+        else:
+            cur.discard(key)
+        self._settings.setValue("plugins_enabled", sorted(cur))
+
     def open_notebook(self, path: str) -> None:
         from .templates import ensure_builtin_templates
         root = Path(path)
@@ -707,6 +792,7 @@ class MainWindow(QMainWindow):
             bool(self._settings.value("versioning_enabled", False, type=bool))
         )
         self._update_title()
+        self._setup_plugins()
         first = next(iter(self.notebook.pages()), None)
         if first:
             self.load_page(first.path)
@@ -835,6 +921,15 @@ class MainWindow(QMainWindow):
     # ---- navigation ----
 
     def _on_tree_clicked(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        # Recent-list mode: model items carry path in UserRole.
+        cur_model = self.tree.model()
+        if cur_model is not self.model:
+            data = index.data(0x0100)
+            if data:
+                self.load_page(str(data))
+                return
         if self.model is None:
             return
         ref = self.model.page_for_index(index)
@@ -932,12 +1027,15 @@ class MainWindow(QMainWindow):
         act_move = menu.addAction("Move to...")
         act_copy = menu.addAction("Copy to...")
         menu.addSeparator()
+        act_props = menu.addAction("Properties...")
+        menu.addSeparator()
         act_delete = menu.addAction("Delete...")
         if ref is None:
             act_rename.setEnabled(False)
             act_move.setEnabled(False)
             act_copy.setEnabled(False)
             act_delete.setEnabled(False)
+            act_props.setEnabled(False)
         chosen = menu.exec(self.tree.viewport().mapToGlobal(pos))
         if chosen is None:
             return
@@ -949,6 +1047,8 @@ class MainWindow(QMainWindow):
             self._move_page_dialog(ref.path)
         elif chosen is act_copy and ref:
             self._copy_page_dialog(ref.path)
+        elif chosen is act_props and ref:
+            self.show_page_properties(ref.path)
         elif chosen is act_delete and ref:
             self._delete_page_dialog(ref.path)
 
@@ -1073,6 +1173,61 @@ class MainWindow(QMainWindow):
             else:
                 self._refresh_backlinks()
                 self._update_status()
+
+    # ---- page properties ----
+
+    def page_properties(self, page: str) -> dict:
+        """Return a dict of page metadata: path, size, ctime, mtime, words,
+        chars, inbound_links, tags."""
+        from datetime import datetime
+        if self.notebook is None:
+            return {}
+        f = self.notebook.file_for(page)
+        text = ""
+        try:
+            text = self.notebook.get_page(page)
+        except Exception:
+            pass
+        st = f.stat() if f.exists() else None
+        from .index import extract_tags
+        tags = extract_tags(text) if text else []
+        info = {
+            "path": page,
+            "file": str(f),
+            "size": st.st_size if st else 0,
+            "ctime": datetime.fromtimestamp(st.st_ctime).isoformat(timespec="seconds") if st else "",
+            "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds") if st else "",
+            "words": len(text.split()),
+            "chars": len(text),
+            "inbound": len(self.index.backlinks(page)) if self.index else 0,
+            "tags": tags,
+        }
+        return info
+
+    def show_page_properties(self, page: str) -> None:
+        info = self.page_properties(page)
+        if not info:
+            return
+        from PyQt6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Properties: {page}")
+        form = QFormLayout(dlg)
+        form.addRow("Path:", QLabel(info["path"]))
+        form.addRow("File:", QLabel(info["file"]))
+        form.addRow("Size:", QLabel(f"{info['size']} bytes"))
+        form.addRow("Created:", QLabel(info["ctime"]))
+        form.addRow("Modified:", QLabel(info["mtime"]))
+        form.addRow("Words:", QLabel(str(info["words"])))
+        form.addRow("Characters:", QLabel(str(info["chars"])))
+        form.addRow("Inbound links:", QLabel(str(info["inbound"])))
+        tag_str = ", ".join(f"#{t}" for t in info["tags"]) or "(none)"
+        form.addRow("Tags:", QLabel(tag_str))
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dlg)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        btns.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.accept)
+        form.addRow(btns)
+        dlg.exec()
 
     # ---- recent + bookmarks ----
 
@@ -1234,6 +1389,184 @@ class MainWindow(QMainWindow):
         cur.setPosition(block.position())
         self.editor.setTextCursor(cur)
         self.editor.ensureCursorVisible()
+
+    # ---- page history ----
+
+    def _open_page_history(self) -> None:
+        if self.notebook is None or self._current_page is None:
+            return
+        from . import versioning
+        if not versioning.is_repo(self.notebook.root):
+            QMessageBox.information(
+                self, "No History",
+                "Versioning is not enabled for this notebook (no git repo).",
+            )
+            return
+        page_file = self.notebook.file_for(self._current_page)
+        rel = str(page_file.relative_to(self.notebook.root))
+        from .history_viewer import HistoryViewer
+        dlg = HistoryViewer(
+            self.notebook.root,
+            self._current_page,
+            rel,
+            self.editor.markdown(),
+            on_restore=self._restore_page_text,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _restore_page_text(self, text: str) -> None:
+        if self.notebook is None or self._current_page is None:
+            return
+        self.notebook.save_page(self._current_page, text)
+        if self.index:
+            self.index.update_page(self._current_page, text)
+        self._maybe_versioning_commit(self._current_page)
+        self.load_page(self._current_page)
+
+    # ---- outline mode ----
+
+    def _set_outline_mode(self, mode: str) -> None:
+        """Switch between 'tree' (PageTreeModel) and 'recent' (flat by mtime)."""
+        if self.notebook is None or self.model is None:
+            return
+        if mode == "recent":
+            from PyQt6.QtGui import QStandardItem, QStandardItemModel
+            recent_model = QStandardItemModel(self)
+            pages = list(self.notebook.pages())
+            pages.sort(
+                key=lambda r: self.notebook.file_for(r.path).stat().st_mtime,
+                reverse=True,
+            )
+            for p in pages:
+                it = QStandardItem(p.path)
+                it.setEditable(False)
+                it.setData(p.path, 0x0100)
+                recent_model.appendRow(it)
+            self.tree.setModel(recent_model)
+            self._outline_mode = "recent"
+        else:
+            self.tree.setModel(self.model)
+            self._outline_mode = "tree"
+
+    def outline_mode(self) -> str:
+        return getattr(self, "_outline_mode", "tree")
+
+    # ---- custom shortcuts ----
+
+    def _all_named_actions(self) -> list[tuple[str, QAction]]:
+        out: list[tuple[str, QAction]] = []
+        for name, val in vars(self).items():
+            if name.startswith("act_") and isinstance(val, QAction):
+                label = val.text().replace("&", "") or name
+                out.append((label, val))
+        out.sort(key=lambda t: t[0].lower())
+        return out
+
+    def apply_custom_shortcuts(self) -> None:
+        """Load shortcut overrides from QSettings and apply to actions."""
+        raw = self._settings.value("shortcuts", {}, type=dict) or {}
+        for label, action in self._all_named_actions():
+            override = raw.get(label)
+            if override:
+                action.setShortcut(QKeySequence(str(override)))
+
+    def set_action_shortcut(self, label: str, key_text: str) -> None:
+        for lab, action in self._all_named_actions():
+            if lab == label:
+                action.setShortcut(QKeySequence(key_text))
+                raw = self._settings.value("shortcuts", {}, type=dict) or {}
+                raw = dict(raw)
+                raw[label] = key_text
+                self._settings.setValue("shortcuts", raw)
+                return
+
+    def _open_shortcut_editor(self) -> None:
+        from PyQt6.QtWidgets import (
+            QDialog, QDialogButtonBox, QTableWidget, QTableWidgetItem,
+            QVBoxLayout, QHeaderView,
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Customize Shortcuts")
+        dlg.resize(540, 480)
+        v = QVBoxLayout(dlg)
+        actions = self._all_named_actions()
+        tbl = QTableWidget(len(actions), 2, dlg)
+        tbl.setHorizontalHeaderLabels(["Action", "Shortcut"])
+        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for r, (label, act) in enumerate(actions):
+            tbl.setItem(r, 0, QTableWidgetItem(label))
+            tbl.setItem(r, 1, QTableWidgetItem(act.shortcut().toString()))
+        v.addWidget(tbl)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        v.addWidget(btns)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            for r, (label, _) in enumerate(actions):
+                key = tbl.item(r, 1).text() if tbl.item(r, 1) else ""
+                self.set_action_shortcut(label, key)
+
+    # ---- quick note ----
+
+    def _open_quick_note(self) -> None:
+        if self.notebook is None:
+            return
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Quick Note")
+        dlg.resize(420, 300)
+        v = QVBoxLayout(dlg)
+        edit = QPlainTextEdit(dlg)
+        edit.setPlaceholderText("Type a quick note... (Ctrl+Enter to save)")
+        v.addWidget(edit, 1)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        v.addWidget(btns)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            text = edit.toPlainText().strip()
+            if text:
+                self.append_to_scratch(text)
+
+    def append_to_scratch(self, text: str) -> str:
+        """Append `text` to the `Scratch` page with a timestamp header.
+        Creates the page if absent. Returns the page path."""
+        from datetime import datetime
+        if self.notebook is None:
+            return ""
+        page = "Scratch"
+        if not self.notebook.exists(page):
+            self.notebook.create_page(page, "# Scratch\n\n")
+        existing = self.notebook.get_page(page)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        appended = existing.rstrip() + f"\n\n## {ts}\n\n{text}\n"
+        self.notebook.save_page(page, appended)
+        if self.index:
+            self.index.update_page(page, appended)
+        if self.model:
+            self.model.refresh()
+            self.tree.setModel(self.model)
+        return page
+
+    # ---- quick switcher ----
+
+    def _open_quick_switcher(self) -> None:
+        if self.index is None:
+            return
+        from .quickswitcher import QuickSwitcher
+        pages = self.index.all_pages()
+        dlg = QuickSwitcher(pages, self)
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            chosen = dlg.chosen()
+            if chosen:
+                self.load_page(chosen)
 
     # ---- find ----
 
@@ -1411,9 +1744,30 @@ class MainWindow(QMainWindow):
         if self.index is None or self._current_page is None:
             self.linkmap_widget.build(None, [], [])
             return
-        fwd = self.index.forward_links(self._current_page)
-        back = self.index.backlinks(self._current_page)
-        self.linkmap_widget.build(self._current_page, fwd, back)
+        hops = self.linkmap_widget.hops()
+        if hops <= 1:
+            fwd = self.index.forward_links(self._current_page)
+            back = self.index.backlinks(self._current_page)
+            self.linkmap_widget.build(self._current_page, fwd, back)
+            return
+        # Multi-hop BFS using forward + backward links.
+        seen = {self._current_page}
+        frontier = {self._current_page}
+        edges: list[tuple[str, str]] = []
+        for _ in range(hops):
+            next_frontier: set[str] = set()
+            for p in frontier:
+                for d in self.index.forward_links(p):
+                    edges.append((p, d))
+                    if d not in seen:
+                        next_frontier.add(d)
+                for s in self.index.backlinks(p):
+                    edges.append((s, p))
+                    if s not in seen:
+                        next_frontier.add(s)
+            seen |= next_frontier
+            frontier = next_frontier
+        self.linkmap_widget.build_multihop(self._current_page, edges)
 
     # ---- spell check ----
 
@@ -1424,12 +1778,50 @@ class MainWindow(QMainWindow):
             return
         if checked:
             if not hasattr(self, "_spell_highlighter") or self._spell_highlighter is None:
-                self._spell_highlighter = SpellHighlighter(self.editor.document())
+                pers = None
+                if self.notebook is not None:
+                    pers = self.notebook.root / ".qnotebook" / "dictionary.txt"
+                self._spell_highlighter = SpellHighlighter(
+                    self.editor.document(), personal_dict_path=pers,
+                )
+                self.editor.attach_spell_highlighter(self._spell_highlighter)
         else:
             if getattr(self, "_spell_highlighter", None) is not None:
                 self._spell_highlighter.setDocument(None)
                 self._spell_highlighter = None
+                self.editor.attach_spell_highlighter(None)
         self._settings.setValue("spell_enabled", bool(checked))
+
+    # ---- dark mode ----
+
+    def _toggle_dark_mode(self, on: bool) -> None:
+        from PyQt6.QtGui import QPalette, QColor
+        from PyQt6.QtWidgets import QApplication
+        self._settings.setValue("dark_mode", bool(on))
+        app = QApplication.instance()
+        if app is None:
+            return
+        if on:
+            pal = QPalette()
+            pal.setColor(QPalette.ColorRole.Window, QColor("#2b2b2b"))
+            pal.setColor(QPalette.ColorRole.WindowText, QColor("#d4d4d4"))
+            pal.setColor(QPalette.ColorRole.Base, QColor("#1e1e1e"))
+            pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#2d2d2d"))
+            pal.setColor(QPalette.ColorRole.Text, QColor("#d4d4d4"))
+            pal.setColor(QPalette.ColorRole.Button, QColor("#3a3a3a"))
+            pal.setColor(QPalette.ColorRole.ButtonText, QColor("#d4d4d4"))
+            pal.setColor(QPalette.ColorRole.Highlight, QColor("#264f78"))
+            pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+            pal.setColor(QPalette.ColorRole.Link, QColor("#9cdcfe"))
+            app.setStyle("Fusion")
+            app.setPalette(pal)
+            self.editor.setStyleSheet(
+                "QTextEdit { background: #1e1e1e; color: #d4d4d4; "
+                "selection-background-color: #264f78; }"
+            )
+        else:
+            app.setPalette(QPalette())
+            self.editor.setStyleSheet("")
 
     # ---- toc ----
 
@@ -1501,23 +1893,51 @@ class MainWindow(QMainWindow):
     def _export_page_html(self) -> None:
         if self.notebook is None or self._current_page is None:
             return
-        from .export import export_page_html
+        from .export import export_page_html, load_notebook_css
         default_name = self._current_page.replace(":", "_") + ".html"
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Page as HTML", default_name, "HTML Files (*.html)"
         )
         if not path:
             return
-        export_page_html(self.notebook, self._current_page, Path(path))
+        export_page_html(
+            self.notebook, self._current_page, Path(path),
+            css=load_notebook_css(self.notebook),
+        )
 
     def _export_notebook_html(self) -> None:
         if self.notebook is None:
             return
-        from .export import export_notebook_html
+        from .export import export_notebook_html, load_notebook_css
         out = QFileDialog.getExistingDirectory(self, "Export Notebook to Directory")
         if not out:
             return
-        export_notebook_html(self.notebook, Path(out))
+        export_notebook_html(
+            self.notebook, Path(out),
+            css=load_notebook_css(self.notebook),
+        )
+
+    def _edit_export_css(self) -> None:
+        if self.notebook is None:
+            return
+        from .export import load_notebook_css, save_notebook_css
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Export CSS")
+        dlg.resize(720, 540)
+        v = QVBoxLayout(dlg)
+        edit = QPlainTextEdit(dlg)
+        edit.setPlainText(load_notebook_css(self.notebook))
+        v.addWidget(edit)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        v.addWidget(btns)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            save_notebook_css(self.notebook, edit.toPlainText())
 
     def _export_page_pdf(self) -> None:
         if self.notebook is None or self._current_page is None:

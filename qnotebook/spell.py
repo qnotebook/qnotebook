@@ -35,10 +35,24 @@ class SpellHighlighter(QSyntaxHighlighter):
     Uses enchant when available; otherwise a no-op (never flags anything).
     """
 
-    def __init__(self, doc: QTextDocument, lang: str = "en_US") -> None:
+    def __init__(self, doc: QTextDocument, lang: str = "en_US",
+                 personal_dict_path=None) -> None:
         super().__init__(doc)
         self._dict = None
         self._ignored: set[str] = set()
+        self._personal_path = personal_dict_path
+        self._personal: set[str] = set()
+        if personal_dict_path is not None:
+            try:
+                from pathlib import Path as _P
+                p = _P(personal_dict_path)
+                if p.is_file():
+                    self._personal = set(
+                        w.strip() for w in p.read_text(encoding="utf-8").splitlines()
+                        if w.strip()
+                    )
+            except Exception:
+                pass
         if HAS_ENCHANT:
             try:
                 self._dict = enchant.Dict(lang)  # type: ignore[attr-defined]
@@ -60,6 +74,16 @@ class SpellHighlighter(QSyntaxHighlighter):
                 self._dict.add(word)
             except Exception:
                 pass
+        self._personal.add(word)
+        if self._personal_path is not None:
+            try:
+                from pathlib import Path as _P
+                p = _P(self._personal_path)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with p.open("a", encoding="utf-8") as fh:
+                    fh.write(word + "\n")
+            except Exception:
+                pass
         self.rehighlight()
 
     def ignore_word(self, word: str) -> None:
@@ -79,7 +103,7 @@ class SpellHighlighter(QSyntaxHighlighter):
             return
         for m in WORD_RE.finditer(text):
             word = m.group(0)
-            if word in self._ignored:
+            if word in self._ignored or word in self._personal:
                 continue
             try:
                 if not self._dict.check(word):

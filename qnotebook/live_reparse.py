@@ -36,7 +36,11 @@ def _has_inline_markers(text: str) -> bool:
         or "[[" in text
         or "_" in text
         or "#" in text
+        or "](" in text
     )
+
+
+MD_LINK_RE = __import__("re").compile(r"!?\[([^\]]*)\]\(([^)]+)\)")
 
 
 def _inline_runs(text: str) -> list[tuple[int, int, QTextCharFormat]]:
@@ -54,6 +58,21 @@ def _inline_runs(text: str) -> list[tuple[int, int, QTextCharFormat]]:
         for k in range(s, e):
             if 0 <= k < len(consumed):
                 consumed[k] = True
+
+    # Markdown links / images: ![alt](url) and [text](url). Style as link span.
+    for m in MD_LINK_RE.finditer(text):
+        is_image = m.group(0).startswith("!")
+        href = m.group(2).strip()
+        f = QTextCharFormat()
+        if is_image:
+            f.setForeground(QColor("#7c3aed"))
+        else:
+            f.setForeground(QColor("#1a5fb4"))
+            f.setFontUnderline(True)
+            f.setAnchor(True)
+            f.setAnchorHref(href)
+        runs.append((m.start(), m.end(), f))
+        mark(m.start(), m.end())
 
     # Wikilink display text replaces `[[Target|alias]]` with alias or target;
     # but in a WYSIWYG editor the user is TYPING `[[Target]]` literally. So

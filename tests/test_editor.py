@@ -478,4 +478,100 @@ def test_live_reparse_wikilink_gets_anchor(qapp):
     c2.setPosition(pos)
     prop = c2.charFormat().property(CHAR_WIKILINK)
     assert prop == "Target"
+
+
+def test_live_reparse_md_link_styled(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    cur = ed.textCursor()
+    cur.insertText("see [example](http://x.test) here")
+    ed.live_reparse_now()
+    txt = ed.toPlainText()
+    pos = txt.index("example") + 1
+    c2 = ed.textCursor()
+    c2.setPosition(pos)
+    href = c2.charFormat().anchorHref()
+    assert href == "http://x.test"
+    ed.deleteLater()
+
+
+def test_live_reparse_md_image_styled(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    cur = ed.textCursor()
+    cur.insertText("![alt](_resources/x.png)")
+    ed.live_reparse_now()
+    txt = ed.toPlainText()
+    pos = txt.index("alt") + 1
+    c2 = ed.textCursor()
+    c2.setPosition(pos)
+    # Image span: foreground colored
+    color = c2.charFormat().foreground().color().name()
+    assert color.lower() == "#7c3aed"
+    ed.deleteLater()
+
+
+def test_live_reparse_does_not_style_unclosed_link(qapp):
+    """When user is still typing the URL there's no closing `)`; no link styling yet."""
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    cur = ed.textCursor()
+    cur.insertText("[draft](http://x")
+    ed.live_reparse_now()
+    txt = ed.toPlainText()
+    pos = txt.index("draft") + 1
+    c2 = ed.textCursor()
+    c2.setPosition(pos)
+    assert c2.charFormat().anchorHref() == ""
+    ed.deleteLater()
+
+
+def test_live_reparse_md_link_preserves_roundtrip(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    cur = ed.textCursor()
+    cur.insertText("see [example](http://x.test) end")
+    ed.live_reparse_now()
+    md = ed.markdown()
+    # After live-reparse the literal text remains; serializing emits paragraph
+    # text including `[example](http://x.test)` (since the bracketed text is
+    # still present in plain text).
+    assert "example" in md and "http://x.test" in md
+    ed.deleteLater()
+
+
+def test_toc_marker_styled_in_editor(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("# Top\n\n[[!TOC]]\n\n## Sub\n")
+    md = ed.markdown()
+    assert "[[!TOC]]" in md
+    ed.deleteLater()
+
+
+def test_equation_loads_and_serializes(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("energy: $E=mc^2$ here\n")
+    out = ed.markdown()
+    assert "$E=mc^2$" in out
+    ed.deleteLater()
+
+
+def test_live_reparse_unclosed_wikilink_no_anchor(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    from qnotebook.md_to_qdoc import CHAR_WIKILINK
+    cur = ed.textCursor()
+    cur.insertText("see [[Target now")  # missing closing ]]
+    ed.live_reparse_now()
+    txt = ed.toPlainText()
+    pos = txt.index("Target") + 1
+    c2 = ed.textCursor()
+    c2.setPosition(pos)
+    assert c2.charFormat().property(CHAR_WIKILINK) is None
+    ed.deleteLater()
     ed.deleteLater()

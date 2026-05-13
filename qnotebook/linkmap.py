@@ -17,9 +17,49 @@ from PyQt6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
+
+
+try:
+    import networkx as nx  # type: ignore
+    HAS_NETWORKX = True
+except Exception:
+    nx = None  # type: ignore
+    HAS_NETWORKX = False
+
+
+def force_layout(nodes: list[str], edges: list[tuple[str, str]],
+                 radius: float = 200.0) -> dict[str, tuple[float, float]]:
+    """Spring layout positions for `nodes` with `edges`.
+
+    Uses networkx.spring_layout when available; falls back to a simple
+    circular layout otherwise."""
+    if not nodes:
+        return {}
+    if HAS_NETWORKX:
+        try:
+            g = nx.Graph()
+            for n in nodes:
+                g.add_node(n)
+            for s, d in edges:
+                if s in g and d in g:
+                    g.add_edge(s, d)
+            pos = nx.spring_layout(g, seed=1, scale=radius)
+            return {k: (float(v[0]), float(v[1])) for k, v in pos.items()}
+        except Exception:
+            pass
+    # Circular fallback
+    out: dict[str, tuple[float, float]] = {}
+    n = len(nodes)
+    for i, name in enumerate(nodes):
+        ang = 2 * math.pi * i / max(1, n)
+        out[name] = (radius * math.cos(ang), radius * math.sin(ang))
+    return out
 
 
 NODE_RADIUS = 24
@@ -49,12 +89,31 @@ class LinkMapDock(QWidget):
         super().__init__(parent)
         v = QVBoxLayout(self)
         v.setContentsMargins(4, 4, 4, 4)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Hops:", self))
+        self.hops_spin = QSpinBox(self)
+        self.hops_spin.setRange(1, 3)
+        self.hops_spin.setValue(1)
+        self.hops_spin.valueChanged.connect(self._on_hops_changed)
+        top.addWidget(self.hops_spin)
+        top.addStretch(1)
+        v.addLayout(top)
         self.scene = QGraphicsScene(self)
         self.view = QGraphicsView(self.scene, self)
         self.view.setRenderHints(self.view.renderHints())
         v.addWidget(self.view, 1)
         self._on_navigate: Callable[[str], None] = lambda _p: None
+        self._on_hops_request: Callable[[int], None] = lambda _h: None
         self._nodes: dict[str, _PageNode] = {}
+
+    def hops(self) -> int:
+        return self.hops_spin.value()
+
+    def set_on_hops_changed(self, cb: Callable[[int], None]) -> None:
+        self._on_hops_request = cb
+
+    def _on_hops_changed(self, value: int) -> None:
+        self._on_hops_request(value)
 
     def set_on_navigate(self, cb: Callable[[str], None]) -> None:
         self._on_navigate = cb
@@ -89,6 +148,49 @@ class LinkMapDock(QWidget):
                 pen.setStyle(Qt.PenStyle.DashLine)
             line = QGraphicsLineItem(center.x(), center.y(), x, y)
             line.setPen(pen)
+            line.setZValue(-1)
+            self.scene.addItem(line)
+        rect = self.scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
+        self.scene.setSceneRect(rect)
+        self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def build_multihop(
+        self,
+        current_page: str | None,
+        edges: list[tuple[str, str]],
+        nodes: list[str] | None = None,
+    ) -> None:
+        """Build a multi-hop graph using force layout.
+
+        `edges` are (src, dst) pairs. `nodes` defaults to the union of all
+        edge endpoints plus current_page."""
+        self.scene.clear()
+        self._nodes = {}
+        if current_page is None:
+            return
+        all_nodes: list[str]
+        if nodes is None:
+            seen: list[str] = []
+            for s, d in edges:
+                for n in (s, d):
+                    if n not in seen:
+                        seen.append(n)
+            if current_page not in seen:
+                seen.insert(0, current_page)
+            all_nodes = seen
+        else:
+            all_nodes = list(nodes)
+        positions = force_layout(all_nodes, edges, radius=180.0)
+        center_pos = positions.get(current_page, (0.0, 0.0))
+        for name, (x, y) in positions.items():
+            self._add_node(name, QPointF(x, y), is_center=(name == current_page))
+        for s, d in edges:
+            if s not in positions or d not in positions:
+                continue
+            sx, sy = positions[s]
+            dx, dy = positions[d]
+            line = QGraphicsLineItem(sx, sy, dx, dy)
+            line.setPen(QPen(QColor("#34495e"), 1.2))
             line.setZValue(-1)
             self.scene.addItem(line)
         rect = self.scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)

@@ -52,6 +52,37 @@ def commit_page(root: Path, page: str) -> bool:
     return res.returncode == 0
 
 
+def page_history(root: Path, page_file_rel: str) -> list[tuple[str, str, str]]:
+    """Return commit log for the file as list of (sha, iso_date, subject).
+
+    Most recent first. Empty list when no repo or no commits."""
+    if not is_repo(root):
+        return []
+    res = _run(
+        [
+            "git", "log", "--follow", "--pretty=format:%H%x1f%ad%x1f%s",
+            "--date=iso", "--", page_file_rel,
+        ],
+        root,
+    )
+    out: list[tuple[str, str, str]] = []
+    for line in res.stdout.splitlines():
+        parts = line.split("\x1f")
+        if len(parts) >= 3:
+            out.append((parts[0], parts[1], parts[2]))
+    return out
+
+
+def page_at_revision(root: Path, sha: str, page_file_rel: str) -> str | None:
+    """Return the content of `page_file_rel` at commit `sha`, or None on error."""
+    if not is_repo(root):
+        return None
+    res = _run(["git", "show", f"{sha}:{page_file_rel}"], root)
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
 def commit_count(root: Path) -> int:
     if not is_repo(root):
         return 0

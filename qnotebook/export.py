@@ -272,6 +272,25 @@ def export_page_pdf(notebook: Notebook, page: str, out_path: Path | str) -> Path
     return out_path
 
 
+def load_notebook_css(notebook: Notebook) -> str:
+    """Return per-notebook CSS from `.qnotebook/export.css` or DEFAULT_CSS."""
+    p = notebook.root / ".qnotebook" / "export.css"
+    if p.is_file():
+        try:
+            return p.read_text(encoding="utf-8")
+        except Exception:
+            pass
+    return DEFAULT_CSS
+
+
+def save_notebook_css(notebook: Notebook, css: str) -> Path:
+    """Persist per-notebook CSS to `.qnotebook/export.css`. Returns the path."""
+    p = notebook.root / ".qnotebook" / "export.css"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(css, encoding="utf-8")
+    return p
+
+
 def export_page_html(
     notebook: Notebook,
     page: str,
