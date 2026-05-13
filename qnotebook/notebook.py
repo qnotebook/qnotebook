@@ -144,11 +144,14 @@ class Notebook:
         return f.read_text(encoding="utf-8")
 
     def save_page(self, page: str, md_text: str) -> None:
+        """Atomic save: write `page.md.tmp` then rename over the target."""
         f = self.file_for(page)
         f.parent.mkdir(parents=True, exist_ok=True)
         # Normalize: single trailing newline
         text = md_text.rstrip("\n") + "\n" if md_text else ""
-        f.write_text(text, encoding="utf-8")
+        tmp = f.with_suffix(f.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(f)
 
     def create_page(self, page: str, initial: str = "") -> PageRef:
         if self.exists(page):

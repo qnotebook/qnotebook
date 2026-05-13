@@ -19,6 +19,9 @@ qnotebook = "qnotebook.__main__:main"
 where = ["."]
 include = ["qnotebook*"]
 
+[tool.setuptools.package-data]
+qnotebook = ["builtin_templates/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 qt_api = "pyqt6"

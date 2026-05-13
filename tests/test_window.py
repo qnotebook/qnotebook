@@ -209,3 +209,62 @@ def test_bookmark_persisted(win, tmp_notebook: Path, qapp, qtbot):
     w2.open_notebook(str(tmp_notebook))
     qtbot.addWidget(w2)
     assert "Home" in w2._bookmarks
+
+
+# ---- search highlighting + jump ----
+
+
+def test_search_hit_jump_highlights_all_matches(win, qapp):
+    win.load_page("Home")
+    win.search_dock_widget.input.setText("Welcome")
+    win._on_search_hit_activated("Home", 3)
+    sels = win.editor.extraSelections()
+    assert len(sels) >= 1
+
+
+def test_escape_clears_search_highlights(win, qapp):
+    win.load_page("Home")
+    win._highlight_all_occurrences("Welcome")
+    assert len(win.editor.extraSelections()) >= 1
+    win.editor.escapePressed.emit()
+    qapp.processEvents()
+    assert win.editor.extraSelections() == []
+
+
+# ---- polish ----
+
+
+def test_window_title_includes_page_and_notebook(win):
+    win.load_page("Home")
+    t = win.windowTitle()
+    assert "Home" in t
+    assert "qnotebook" in t
+    assert "nb" in t  # tmp_notebook dir name
+
+
+def test_status_shows_page_count_and_notebook(win):
+    win.load_page("Home")
+    s = win._status_label.text()
+    assert "nb" in s  # notebook name
+    assert "page" in s  # total page count label
+
+
+def test_recent_notebooks_tracked(qapp, tmp_notebook, qtbot):
+    w = MainWindow()
+    w.open_notebook(str(tmp_notebook))
+    qtbot.addWidget(w)
+    recents = w._recent_notebooks()
+    assert str(tmp_notebook.resolve()) in [r for r in recents]
+
+
+def test_save_atomic_write(win, tmp_notebook):
+    win.load_page("Home")
+    from PyQt6.QtGui import QTextCursor
+    cur = win.editor.textCursor()
+    cur.movePosition(QTextCursor.MoveOperation.End)
+    cur.insertText("\n\nAtomic write test.\n")
+    win._save_current()
+    # No leftover .tmp file
+    assert not (tmp_notebook / "Home.md.tmp").exists()
+    body = (tmp_notebook / "Home.md").read_text(encoding="utf-8")
+    assert "Atomic write test." in body

@@ -6,7 +6,7 @@
 files on disk. Heavily inspired by Zim Desktop Wiki, but written from scratch — no code shared,
 Python + PyQt6 + `markdown-it-py`.
 
-## Scope (v0.4)
+## Scope (v0.5)
 
 - Open a notebook: any directory with `.md` files.
 - Tree of pages with lazy-loaded children (directory hierarchy).
@@ -126,7 +126,7 @@ spans. Rebuilt on notebook open; incrementally updated on save.
 ## Module map
 
 - `qnotebook/__main__.py`       — entry point, `QApplication` setup
-- `qnotebook/window.py`         — `MainWindow` (tree + editor + backlinks dock)
+- `qnotebook/window.py`         — `MainWindow` (tree + editor + all docks)
 - `qnotebook/editor.py`         — `MarkdownEditor(QTextEdit)` WYSIWYG surface
 - `qnotebook/md_to_qdoc.py`     — markdown → `QTextDocument`
 - `qnotebook/qdoc_to_md.py`     — `QTextDocument` → markdown
@@ -135,6 +135,68 @@ spans. Rebuilt on notebook open; incrementally updated on save.
 - `qnotebook/page_model.py`     — `QAbstractItemModel` over the notebook
 - `qnotebook/history.py`        — back/forward stack
 - `qnotebook/search.py`         — `Search(notebook, index)` full-text query
+- `qnotebook/export.py`         — HTML/PDF export
+- `qnotebook/templates.py`      — page templates (bundled + user)
+- `qnotebook/builtin_templates/`— bundled `.md` templates (copied on first open)
+- `qnotebook/journal.py`        — Calendar dock + journal page creation
+- `qnotebook/toc.py`            — TOC dock
+- `qnotebook/linkmap.py`        — Link map dock (QGraphicsScene)
+- `qnotebook/spell.py`          — `SpellHighlighter` (pyenchant optional)
+- `qnotebook/versioning.py`     — git commit-on-save
+- `qnotebook/live_reparse.py`   — debounced per-block inline reparse
+
+## Features added in v0.5 (wave 2)
+
+- **HTML export**: `qnotebook/export.py`. Single page or whole notebook. Embedded
+  CSS (serif body, monospace code blocks, ~720px content column, sidebar).
+  Wikilinks → relative `.html` hrefs; images copied into `_resources/`
+  siblings. Tags styled as `<a class="tag">`. File → Export.
+- **PDF export + Print**: `export_page_pdf()` renders via `QTextDocument.print`
+  on `QPdfWriter` (A4, 18mm margins). File → Export → Current page as PDF.
+  Ctrl+P opens `QPrintDialog` and prints the current page.
+- **Page templates**: `qnotebook/templates.py` loads `<notebook>/.qnotebook/templates/*.md`.
+  Placeholders: `{{date}}`, `{{time}}`, `{{datetime}}`, `{{title}}`, `{{path}}`,
+  `{{year}}`, `{{month}}`, `{{day}}`. Bundled templates (Meeting Notes,
+  Daily Journal, Weekly Review) live in `qnotebook/builtin_templates/`; they
+  copy into the notebook on first open when its `templates/` dir is empty.
+  The New Page dialog gets a template dropdown; File → New from Template
+  pins a specific template.
+- **Journal / Calendar** (`qnotebook/journal.py`): `QCalendarWidget` dock.
+  Click a date → opens/creates `Journal:YYYY:MM:DD` using the Daily Journal
+  template. Dates with existing journal pages render bold. View → Calendar.
+- **TOC dock** (`qnotebook/toc.py`): parses heading hierarchy from the editor
+  markdown, click a heading to jump. Debounced refresh on textChanged
+  (200ms). View → Table of Contents.
+- **Autocomplete** in editor: `QCompleter` popups for `[[wikilinks]]` (page
+  paths from the index) and `#tags` (tag list). Enter/Tab accepts; wikilink
+  completion inserts the closing `]]` when absent.
+- **Search hit highlighting + jump**: after clicking a search result, the
+  editor jumps to the line and paints `QTextEdit.ExtraSelection` yellow
+  highlights for every match on the page. Esc (in the editor) clears.
+- **Spell check** (`qnotebook/spell.py`): `SpellHighlighter(QSyntaxHighlighter)`
+  overlay with red wavy underlines on misspelled words (pyenchant). View →
+  Spell Check toggle; persisted in QSettings; off by default.
+  Gracefully disabled when `enchant` is missing (`HAS_ENCHANT = False`).
+- **Link map dock** (`qnotebook/linkmap.py`): `QGraphicsScene` graph of the
+  current page (center) plus its forward + backward links (radial layout;
+  backlinks drawn dashed). Click a node to navigate. View → Link Map.
+- **Versioning** (`qnotebook/versioning.py`): optional per-save git commits.
+  File → "Enable Version History" toggle (persisted). On save, runs
+  `git add -A && git commit -m "edit: <page>"` in the notebook root;
+  initializes the repo on first use (with a local user.email/name config
+  so commits work in sandboxes without a global identity).
+- **Live per-block reparse** (`qnotebook/live_reparse.py`): debounced
+  (200ms) re-styling of the current block's inline formatting while typing.
+  Handles `**bold**`, `_italic_`, `~~strike~~`, `` `code` ``, `[[wiki]]`,
+  `#tag`. Preserves cursor + selection + modification flag. Only fires on
+  blocks whose plain text still contains raw markdown markers — so an
+  already-parsed block's formatting is never stripped.
+- **Window title**: `<page> — <notebook> — qnotebook`, with `*` prefix when
+  dirty.
+- **Status bar** now includes notebook name and total page count.
+- **Atomic saves**: `Notebook.save_page` writes `page.md.tmp` then renames.
+- **Recent Notebooks** menu: last 5 opened notebooks (File → Recent
+  Notebooks), persisted under `QSettings["recent_notebooks"]`.
 
 ## Features added in v0.4
 
@@ -161,18 +223,23 @@ spans. Rebuilt on notebook open; incrementally updated on save.
   with a language tag. Colors are applied per fragment, serialization
   still round-trips to the same fence + content.
 
-## Explicitly deferred features (wave 2+)
+## Explicitly deferred features (wave 3+)
 
-- **Live incremental re-parse per block.** Currently the document is
-  fully re-serialized on save. It's fast enough for reasonable pages,
-  but a per-block dirty-range serializer is a future optimization.
-- **Export** (HTML/PDF).
-- **Spell check.**
-- **Plugins.**
-- **mdit-py-plugins tasklist extension.** We detect `[ ]` / `[x]`
+- **Plugins**: no plugin architecture yet. The journal/calendar is a
+  built-in, not a plugin.
+- **mdit-py-plugins tasklist extension.** We still detect `[ ]` / `[x]`
   ourselves on the first text token of a bullet-list item.
-- **Tag autocomplete** while typing `#`.
-- **Search result highlighting** in the editor after a jump.
+- **Advanced link map**: only 1-hop; no zoom/pan UX, no force-directed
+  layout, no clustering.
+- **Spell-check context menu**: the `SpellHighlighter` exposes
+  `suggestions()` / `add_to_dictionary()` / `ignore_word()`, but those
+  aren't yet wired into the editor's context menu.
+- **Version-history browsing/rollback UI**: commits happen in the
+  background but there's no in-app history viewer (use `git log`
+  externally).
+- **Live reparse for markdown links `[text](url)` and images**: live
+  reparse only handles inline emphasis / code / wikilinks / tags. Links
+  and images still require a save+load round-trip to re-render.
 
 ## Build / test commands
 
@@ -267,6 +334,57 @@ No GObject, no GTK, no `pyxdg`.
   onto self and onto a descendant of self (would orphan the move). A
   drop with `parent.isValid() == False` is interpreted as "move to
   top level".
+
+## Wave-2 gotchas
+
+- **Live reparse guard.** `live_reparse.reparse_block()` only runs when
+  the block's plain text still contains at least one raw markdown marker
+  (`**`, `~~`, `_`, `` ` ``, `[[`, `#`). Otherwise it returns without
+  touching the block — otherwise an already-parsed block (whose `**` has
+  already been consumed and replaced with a bold char run) would get its
+  bold formatting stripped.
+- **Live reparse delimiter exclusion.** When `**bold**` is detected,
+  only the inner span `bold` (not the `**`s) is marked bold. The
+  serializer's bold-fragment → `**…**` round-trip would otherwise emit
+  `****bold****`.
+- **HTML export pre-processor.** We rewrite `[[Page]]` and `#tag` to
+  raw HTML *before* handing to `markdown-it-py` with `html=True`. Code
+  fences and inline code spans are excluded so `` `[[X]]` `` stays
+  literal. Relative hrefs are computed by counting the source page's
+  `:` depth and prefixing `../`.
+- **PDF export document width.** `QPdfWriter.pageLayout().paintRectPixels()`
+  gives the printable rect in device pixels at the writer's resolution;
+  we pass its size to `doc.setPageSize()` so long paragraphs wrap rather
+  than clip.
+- **Calendar highlight repaint.** `CalendarDock.refresh_highlights()`
+  clears prior bold formats via a blank `QTextCharFormat`, then re-paints
+  only the currently-displayed month. It hooks `currentPageChanged`.
+- **Template file handling.** `ensure_builtin_templates()` is a no-op if
+  the notebook's templates dir already has `.md` files — never overwrites
+  user edits.
+- **Journal page path**: `Journal:YYYY:MM:DD` with zero-padding (so
+  Jan 3 is `:01:03`, not `:1:3`). Sorting stays lexicographic.
+- **Autocomplete popup position.** `_update_completer` builds a
+  `QCompleter` rect from `cursorRect()`, widened to fit the longest
+  candidate. Close brackets (`]]`) are only auto-inserted for wikilink
+  completion, not tags.
+- **Search highlight extra-selections.** `setExtraSelections([])` clears
+  without touching the document; Esc in the editor (only when the
+  completer popup is NOT visible — popup Esc closes the popup first)
+  clears highlights via the `escapePressed` signal on `MarkdownEditor`.
+- **Versioning init.** On `git init`, we also run
+  `git config user.email/user.name` locally so commits succeed in
+  sandboxes without a system-wide identity. Commits are silently skipped
+  when `git status --porcelain` reports no changes (e.g. save with no
+  diff).
+- **Atomic save.** `Notebook.save_page` now writes `page.md.tmp` in the
+  same directory, then `Path.replace()`s it over `page.md`. Same-volume
+  rename, so it's atomic on POSIX.
+- **enchant optional.** `spell.HAS_ENCHANT` is `True` only if
+  `import enchant` succeeds. Missing → `SpellHighlighter` becomes a
+  no-op (`is_active()` returns False), the View menu toggle is disabled,
+  and the spell test suite skips its two real tests. Currently enchant
+  is NOT installed in the dev environment — those tests skip.
 
 ## Key design decisions
 

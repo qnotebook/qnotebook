@@ -353,3 +353,129 @@ def test_image_fragment_in_markdown_source(qapp, tmp_path):
     assert "Before." in md
     assert "![logo](_resources/logo.png)" in md
     ed.deleteLater()
+
+
+# ---- autocomplete ----
+
+
+def test_completer_detects_wikilink_prefix(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_completion_sources(["Home", "Other", "Sub:Child"], [])
+    from PyQt6.QtGui import QTextCursor
+    cur = ed.textCursor()
+    cur.insertText("See [[Ho")
+    info = ed._active_prefix()
+    assert info is not None
+    mode, prefix, _ = info
+    assert mode == "wiki"
+    assert prefix == "Ho"
+    ed.deleteLater()
+
+
+def test_completer_detects_tag_prefix(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_completion_sources([], ["todo", "urgent", "review"])
+    from PyQt6.QtGui import QTextCursor
+    cur = ed.textCursor()
+    cur.insertText("foo #tod")
+    info = ed._active_prefix()
+    assert info is not None
+    mode, prefix, _ = info
+    assert mode == "tag"
+    assert prefix == "tod"
+    ed.deleteLater()
+
+
+def test_completer_wikilink_activation_inserts_closing_brackets(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_completion_sources(["Home", "Other"], [])
+    from PyQt6.QtGui import QTextCursor
+    cur = ed.textCursor()
+    cur.insertText("See [[Ot")
+    # Simulate activation
+    ed._update_completer()
+    ed._on_completer_activated("Other")
+    text = ed.toPlainText()
+    assert "[[Other]]" in text
+    ed.deleteLater()
+
+
+def test_completer_inactive_outside_brackets(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_completion_sources(["Home"], [])
+    from PyQt6.QtGui import QTextCursor
+    cur = ed.textCursor()
+    cur.insertText("just plain text")
+    assert ed._active_prefix() is None
+    ed.deleteLater()
+
+
+# ---- live reparse ----
+
+
+def test_live_reparse_makes_bold(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    from PyQt6.QtGui import QTextCursor
+    cur = ed.textCursor()
+    cur.insertText("this is **bold** text")
+    ed.live_reparse_now()
+    # Find the character format at the "b" in "bold".
+    full = ed.toPlainText()
+    bold_start = full.index("bold")
+    cur2 = ed.textCursor()
+    cur2.setPosition(bold_start + 1)
+    from PyQt6.QtGui import QFont
+    assert cur2.charFormat().fontWeight() >= QFont.Weight.Bold
+    ed.deleteLater()
+
+
+def test_live_reparse_roundtrip_preserved(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("hello **world**\n")
+    ed.set_live_reparse_enabled(True)
+    # Trigger reparse without changing text
+    ed.live_reparse_now()
+    md = ed.markdown()
+    assert "**world**" in md
+    ed.deleteLater()
+
+
+def test_live_reparse_preserves_cursor_position(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    from PyQt6.QtGui import QTextCursor
+    cur = ed.textCursor()
+    cur.insertText("alpha _italic_ beta")
+    # Place cursor at a known position
+    target = 3
+    cur.setPosition(target)
+    ed.setTextCursor(cur)
+    ed.live_reparse_now()
+    assert ed.textCursor().position() == target
+    ed.deleteLater()
+
+
+def test_live_reparse_wikilink_gets_anchor(qapp):
+    ed = MarkdownEditor()
+    ed.load_markdown("")
+    ed.set_live_reparse_enabled(True)
+    from PyQt6.QtGui import QTextCursor
+    from qnotebook.md_to_qdoc import CHAR_WIKILINK
+    cur = ed.textCursor()
+    cur.insertText("see [[Target]] now")
+    ed.live_reparse_now()
+    # Move cursor into the wikilink
+    txt = ed.toPlainText()
+    pos = txt.index("Target") + 1
+    c2 = ed.textCursor()
+    c2.setPosition(pos)
+    prop = c2.charFormat().property(CHAR_WIKILINK)
+    assert prop == "Target"
+    ed.deleteLater()

@@ -359,7 +359,15 @@ class MainWindow(QMainWindow):
         self.editor.imagePasted.connect(self._on_image_pasted)
         self.editor.fileDropped.connect(self._on_file_dropped)
         self.editor.autoSaveRequested.connect(self._auto_save)
+        self.editor.escapePressed.connect(self._clear_search_highlights)
         self.editor.textChanged.connect(self._update_status)
+        # Debounce toc refresh
+        from PyQt6.QtCore import QTimer
+        self._toc_refresh_timer = QTimer(self)
+        self._toc_refresh_timer.setSingleShot(True)
+        self._toc_refresh_timer.setInterval(200)
+        self._toc_refresh_timer.timeout.connect(self._refresh_toc)
+        self.editor.textChanged.connect(self._toc_refresh_timer.start)
         # Load autosave prefs
         autosave_ms = int(self._settings.value("autosave_ms", 30000, type=int))
         autosave_on = self._settings.value("autosave_enabled", True, type=bool)
@@ -406,6 +414,48 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, tags_dock)
         tags_dock.hide()
         self.tags_dock = tags_dock
+
+        from .linkmap import LinkMapDock
+        self.linkmap_widget = LinkMapDock(self)
+        self.linkmap_widget.set_on_navigate(self.load_page)
+        linkmap_dock = QDockWidget("Link Map", self)
+        linkmap_dock.setWidget(self.linkmap_widget)
+        linkmap_dock.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, linkmap_dock)
+        linkmap_dock.hide()
+        self.linkmap_dock = linkmap_dock
+
+        from .toc import TocDock
+        self.toc_widget = TocDock(self)
+        self.toc_widget.set_on_activated(self._jump_to_line_from_toc)
+        toc_dock = QDockWidget("Table of Contents", self)
+        toc_dock.setWidget(self.toc_widget)
+        toc_dock.setAllowedAreas(
+            Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.LeftDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, toc_dock)
+        toc_dock.hide()
+        self.toc_dock = toc_dock
+
+        from .journal import CalendarDock
+        self.calendar_widget = CalendarDock(self)
+        self.calendar_widget.set_on_date_activated(self._on_calendar_date_activated)
+        self.calendar_widget.set_page_exists(
+            lambda p: self.notebook is not None and self.notebook.exists(p)
+        )
+        calendar_dock = QDockWidget("Calendar", self)
+        calendar_dock.setWidget(self.calendar_widget)
+        calendar_dock.setAllowedAreas(
+            Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.LeftDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, calendar_dock)
+        calendar_dock.hide()
+        self.calendar_dock = calendar_dock
 
         self.search_dock_widget = SearchDock(self)
         self.search_dock_widget.set_on_activate(self._on_search_hit_activated)
@@ -511,6 +561,22 @@ class MainWindow(QMainWindow):
         self.act_manage_bookmarks = QAction("Manage Bookmarks...", self)
         self.act_manage_bookmarks.triggered.connect(self._manage_bookmarks)
 
+        self.act_export_page_html = QAction("Current page as &HTML...", self)
+        self.act_export_page_html.triggered.connect(self._export_page_html)
+
+        self.act_export_notebook_html = QAction("Whole &notebook as HTML...", self)
+        self.act_export_notebook_html.triggered.connect(self._export_notebook_html)
+
+        self.act_export_page_pdf = QAction("Current page as &PDF...", self)
+        self.act_export_page_pdf.triggered.connect(self._export_page_pdf)
+
+        self.act_toggle_versioning = QAction("Enable &Version History", self, checkable=True)
+        self.act_toggle_versioning.triggered.connect(self._toggle_versioning)
+
+        self.act_print = QAction("&Print...", self)
+        self.act_print.setShortcut(QKeySequence("Ctrl+P"))
+        self.act_print.triggered.connect(self._print_current_page)
+
         self.act_quit = QAction("&Quit", self)
         self.act_quit.setShortcut(QKeySequence.StandardKey.Quit)
         self.act_quit.triggered.connect(self.close)
@@ -519,8 +585,21 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
         m_file = mb.addMenu("&File")
         m_file.addAction(self.act_open)
+        self.m_recent_notebooks = m_file.addMenu("Recent &Notebooks")
+        self.m_recent_notebooks.aboutToShow.connect(self._populate_recent_notebooks_menu)
         m_file.addAction(self.act_new_page)
+        self.m_new_from_template = m_file.addMenu("New from &Template")
+        self.m_new_from_template.aboutToShow.connect(self._populate_templates_menu)
         m_file.addAction(self.act_save)
+        m_file.addSeparator()
+        self.m_export = m_file.addMenu("&Export")
+        self.m_export.addAction(self.act_export_page_html)
+        self.m_export.addAction(self.act_export_notebook_html)
+        self.m_export.addAction(self.act_export_page_pdf)
+        m_file.addSeparator()
+        m_file.addAction(self.act_print)
+        m_file.addSeparator()
+        m_file.addAction(self.act_toggle_versioning)
         m_file.addSeparator()
         m_file.addAction(self.act_quit)
         m_edit = mb.addMenu("&Edit")
@@ -543,6 +622,27 @@ class MainWindow(QMainWindow):
         m_nav.addAction(self.act_forward)
         self.m_go = mb.addMenu("&Go")
         self.m_go.aboutToShow.connect(self._populate_go_menu)
+        m_view = mb.addMenu("&View")
+        self.act_toggle_calendar = QAction("&Calendar", self, checkable=True)
+        self.act_toggle_calendar.triggered.connect(self._toggle_calendar_dock)
+        m_view.addAction(self.act_toggle_calendar)
+        self.act_toggle_toc = QAction("&Table of Contents", self, checkable=True)
+        self.act_toggle_toc.triggered.connect(self._toggle_toc_dock)
+        m_view.addAction(self.act_toggle_toc)
+        from .spell import HAS_ENCHANT
+        self.act_toggle_linkmap = QAction("&Link Map", self, checkable=True)
+        self.act_toggle_linkmap.triggered.connect(self._toggle_linkmap_dock)
+        m_view.addAction(self.act_toggle_linkmap)
+        self.act_toggle_spell = QAction("&Spell Check", self, checkable=True)
+        self.act_toggle_spell.setEnabled(HAS_ENCHANT)
+        self.act_toggle_spell.triggered.connect(self._toggle_spell_check)
+        m_view.addAction(self.act_toggle_spell)
+        # Persist preference
+        spell_pref = self._settings.value("spell_enabled", False, type=bool)
+        if HAS_ENCHANT and bool(spell_pref):
+            self.act_toggle_spell.setChecked(True)
+            self._toggle_spell_check(True)
+        self.m_view = m_view
         m_fmt = mb.addMenu("F&ormat")
         m_fmt.addAction(self.act_bold)
         m_fmt.addAction(self.act_italic)
@@ -587,8 +687,10 @@ class MainWindow(QMainWindow):
             self.open_notebook(path)
 
     def open_notebook(self, path: str) -> None:
+        from .templates import ensure_builtin_templates
         root = Path(path)
         self.notebook = Notebook(root)
+        ensure_builtin_templates(self.notebook)
         self.index = Index(self.notebook)
         self.index.rebuild()
         self.search = Search(self.notebook, self.index)
@@ -600,6 +702,10 @@ class MainWindow(QMainWindow):
         self.model.pageMoved.connect(self._on_page_moved)
         self.tree.setModel(self.model)
         self._settings.setValue("last_notebook", str(self.notebook.root))
+        self._push_recent_notebook(str(self.notebook.root))
+        self.act_toggle_versioning.setChecked(
+            bool(self._settings.value("versioning_enabled", False, type=bool))
+        )
         self._update_title()
         first = next(iter(self.notebook.pages()), None)
         if first:
@@ -624,7 +730,9 @@ class MainWindow(QMainWindow):
         self._push_recent(page_path)
         self.history.push(page_path)
         self._refresh_backlinks()
+        self._refresh_linkmap()
         self._update_status()
+        self._update_title()
         if self.model:
             idx = self.model.index_for_page(page_path)
             if idx.isValid():
@@ -638,27 +746,91 @@ class MainWindow(QMainWindow):
         if self.index:
             self.index.update_page(self._current_page, md)
         self.editor.clear_dirty()
+        self._maybe_versioning_commit(self._current_page)
         self._refresh_backlinks()
         self._refresh_tags()
+        self._refresh_toc()
         self._update_status()
 
-    def _new_page(self) -> None:
+    def _maybe_versioning_commit(self, page: str) -> None:
         if self.notebook is None:
             return
-        name, ok = QInputDialog.getText(self, "New Page", "Page path (e.g. Foo or Foo:Bar):")
-        if not ok or not name.strip():
+        if not bool(self._settings.value("versioning_enabled", False, type=bool)):
             return
-        path = name.strip()
+        from . import versioning
+        versioning.commit_page(self.notebook.root, page)
+
+    def _toggle_versioning(self, checked: bool) -> None:
+        self._settings.setValue("versioning_enabled", bool(checked))
+        if checked and self.notebook is not None:
+            from . import versioning
+            versioning.init_repo(self.notebook.root)
+
+    def _new_page(self, template_name: str | None = None) -> None:
+        if self.notebook is None:
+            return
+        from .templates import list_templates, load_template, render_template
+        from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout
+        dlg = QDialog(self)
+        dlg.setWindowTitle("New Page")
+        form = QFormLayout(dlg)
+        name_edit = QLineEdit(dlg)
+        name_edit.setPlaceholderText("Foo or Foo:Bar")
+        form.addRow("Page path:", name_edit)
+        combo = QComboBox(dlg)
+        available = list_templates(self.notebook)
+        combo.addItems(available)
+        if template_name and template_name in available:
+            combo.setCurrentText(template_name)
+        form.addRow("Template:", combo)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        path = name_edit.text().strip()
+        if not path:
+            return
+        chosen_template = combo.currentText()
         if self.notebook.exists(path):
             QMessageBox.warning(self, "Exists", f"Page {path} already exists")
             return
-        self.notebook.create_page(path, f"# {path.rsplit(':', 1)[-1]}\n")
+        if chosen_template == "Blank":
+            initial = f"# {path.rsplit(':', 1)[-1]}\n"
+        else:
+            tpl = load_template(self.notebook, chosen_template)
+            initial = render_template(tpl, path)
+        self.notebook.create_page(path, initial)
         if self.index:
             self.index.update_page(path)
         if self.model:
             self.model.refresh()
             self.tree.setModel(self.model)
         self.load_page(path)
+
+    def create_page_from_template(self, page_path: str, template_name: str) -> None:
+        """Programmatic helper: create a page using a named template.
+
+        Used by New-from-template menu entries, calendar/journal, etc."""
+        if self.notebook is None:
+            return
+        from .templates import load_template, render_template
+        if self.notebook.exists(page_path):
+            self.load_page(page_path)
+            return
+        tpl = load_template(self.notebook, template_name)
+        initial = render_template(tpl, page_path) if tpl else f"# {page_path.rsplit(':', 1)[-1]}\n"
+        self.notebook.create_page(page_path, initial)
+        if self.index:
+            self.index.update_page(page_path)
+        if self.model:
+            self.model.refresh()
+            self.tree.setModel(self.model)
+        self.load_page(page_path)
 
     # ---- navigation ----
 
@@ -1013,6 +1185,14 @@ class MainWindow(QMainWindow):
         if self.index is None:
             return
         self.tags_dock_widget.refresh(self.index.tags())
+        self._refresh_completion_sources()
+
+    def _refresh_completion_sources(self) -> None:
+        if self.index is None:
+            return
+        pages = self.index.all_pages()
+        tags = [t for t, _ in self.index.tags()]
+        self.editor.set_completion_sources(pages, tags)
 
     def _on_search_hit_activated(self, page: str, line: int) -> None:
         if self.notebook is None or not self.notebook.exists(page):
@@ -1020,6 +1200,30 @@ class MainWindow(QMainWindow):
         self.load_page(page)
         if line > 0:
             self._jump_to_line(line)
+        needle = self.search_dock_widget.input.text().strip()
+        if needle:
+            self._highlight_all_occurrences(needle)
+
+    def _highlight_all_occurrences(self, needle: str) -> None:
+        from PyQt6.QtGui import QColor, QTextCharFormat
+        from PyQt6.QtWidgets import QTextEdit
+        doc = self.editor.document()
+        selections: list[QTextEdit.ExtraSelection] = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("#fff48a"))
+        cursor = QTextCursor(doc)
+        while True:
+            cursor = doc.find(needle, cursor)
+            if cursor.isNull():
+                break
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            sel.format = fmt
+            selections.append(sel)
+        self.editor.setExtraSelections(selections)
+
+    def _clear_search_highlights(self) -> None:
+        self.editor.setExtraSelections([])
 
     def _jump_to_line(self, line_no: int) -> None:
         doc = self.editor.document()
@@ -1180,6 +1384,163 @@ class MainWindow(QMainWindow):
         abs_path = (page_dir / rel_path).resolve()
         self.editor.insert_image(rel_path, alt, str(abs_path))
 
+    def _populate_templates_menu(self) -> None:
+        self.m_new_from_template.clear()
+        if self.notebook is None:
+            act = self.m_new_from_template.addAction("(no notebook open)")
+            act.setEnabled(False)
+            return
+        from .templates import list_templates
+        for name in list_templates(self.notebook):
+            act = self.m_new_from_template.addAction(name)
+            act.triggered.connect(
+                lambda _checked=False, n=name: self._new_page(template_name=n)
+            )
+
+    # ---- link map ----
+
+    def _toggle_linkmap_dock(self, checked: bool) -> None:
+        if checked:
+            self.linkmap_dock.show()
+            self.linkmap_dock.raise_()
+            self._refresh_linkmap()
+        else:
+            self.linkmap_dock.hide()
+
+    def _refresh_linkmap(self) -> None:
+        if self.index is None or self._current_page is None:
+            self.linkmap_widget.build(None, [], [])
+            return
+        fwd = self.index.forward_links(self._current_page)
+        back = self.index.backlinks(self._current_page)
+        self.linkmap_widget.build(self._current_page, fwd, back)
+
+    # ---- spell check ----
+
+    def _toggle_spell_check(self, checked: bool) -> None:
+        from .spell import HAS_ENCHANT, SpellHighlighter
+        if not HAS_ENCHANT:
+            self.act_toggle_spell.setChecked(False)
+            return
+        if checked:
+            if not hasattr(self, "_spell_highlighter") or self._spell_highlighter is None:
+                self._spell_highlighter = SpellHighlighter(self.editor.document())
+        else:
+            if getattr(self, "_spell_highlighter", None) is not None:
+                self._spell_highlighter.setDocument(None)
+                self._spell_highlighter = None
+        self._settings.setValue("spell_enabled", bool(checked))
+
+    # ---- toc ----
+
+    def _toggle_toc_dock(self, checked: bool) -> None:
+        if checked:
+            self.toc_dock.show()
+            self.toc_dock.raise_()
+            self._refresh_toc()
+        else:
+            self.toc_dock.hide()
+
+    def _refresh_toc(self) -> None:
+        self.toc_widget.refresh(self.editor.markdown())
+
+    def _jump_to_line_from_toc(self, line: int) -> None:
+        self._jump_to_line(line + 1)
+        self.editor.setFocus()
+
+    # ---- calendar / journal ----
+
+    def _toggle_calendar_dock(self, checked: bool) -> None:
+        if checked:
+            self.calendar_dock.show()
+            self.calendar_dock.raise_()
+            self.calendar_widget.refresh_highlights()
+        else:
+            self.calendar_dock.hide()
+
+    def _on_calendar_date_activated(self, d) -> None:
+        if self.notebook is None:
+            return
+        from .journal import journal_page_for_date
+        page = journal_page_for_date(d)
+        if not self.notebook.exists(page):
+            self.create_page_from_template(page, "Daily Journal")
+        else:
+            self.load_page(page)
+        self.calendar_widget.refresh_highlights()
+
+    # ---- recent notebooks ----
+
+    def _recent_notebooks(self) -> list[str]:
+        raw = self._settings.value("recent_notebooks", [], type=list) or []
+        return [str(x) for x in raw]
+
+    def _push_recent_notebook(self, path: str) -> None:
+        existing = self._recent_notebooks()
+        if path in existing:
+            existing.remove(path)
+        existing.insert(0, path)
+        del existing[5:]
+        self._settings.setValue("recent_notebooks", existing)
+
+    def _populate_recent_notebooks_menu(self) -> None:
+        self.m_recent_notebooks.clear()
+        entries = self._recent_notebooks()
+        if not entries:
+            act = self.m_recent_notebooks.addAction("(none)")
+            act.setEnabled(False)
+            return
+        for p in entries:
+            act = self.m_recent_notebooks.addAction(p)
+            act.triggered.connect(
+                lambda _checked=False, path=p: self.open_notebook(path)
+            )
+
+    # ---- export ----
+
+    def _export_page_html(self) -> None:
+        if self.notebook is None or self._current_page is None:
+            return
+        from .export import export_page_html
+        default_name = self._current_page.replace(":", "_") + ".html"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Page as HTML", default_name, "HTML Files (*.html)"
+        )
+        if not path:
+            return
+        export_page_html(self.notebook, self._current_page, Path(path))
+
+    def _export_notebook_html(self) -> None:
+        if self.notebook is None:
+            return
+        from .export import export_notebook_html
+        out = QFileDialog.getExistingDirectory(self, "Export Notebook to Directory")
+        if not out:
+            return
+        export_notebook_html(self.notebook, Path(out))
+
+    def _export_page_pdf(self) -> None:
+        if self.notebook is None or self._current_page is None:
+            return
+        from .export import export_page_pdf
+        default_name = self._current_page.replace(":", "_") + ".pdf"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Page as PDF", default_name, "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+        export_page_pdf(self.notebook, self._current_page, Path(path))
+
+    def _print_current_page(self) -> None:
+        from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
+        if self.notebook is None or self._current_page is None:
+            return
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        dlg = QPrintDialog(printer, self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        self.editor.document().print(printer)
+
     # ---- misc ----
 
     def _refresh_backlinks(self) -> None:
@@ -1203,8 +1564,13 @@ class MainWindow(QMainWindow):
     def _update_title(self) -> None:
         name = self.notebook.root.name if self.notebook else ""
         prefix = "*" if self.editor.is_dirty() else ""
-        suffix = f" — {name}" if name else ""
-        self.setWindowTitle(f"{prefix}qnotebook{suffix}")
+        parts: list[str] = []
+        if self._current_page:
+            parts.append(self._current_page)
+        if name:
+            parts.append(name)
+        parts.append("qnotebook")
+        self.setWindowTitle(prefix + " — ".join(parts))
 
     def _update_status(self) -> None:
         parts = []
@@ -1212,6 +1578,11 @@ class MainWindow(QMainWindow):
         words = len(text.split())
         chars = len(text)
         mins = max(1, round(words / 200)) if words else 0
+        if self.notebook is not None:
+            parts.append(self.notebook.root.name)
+        if self.index is not None:
+            total = len(self.index.all_pages())
+            parts.append(f"{total} page" + ("" if total == 1 else "s"))
         if words:
             parts.append(f"{words} words")
         if chars:

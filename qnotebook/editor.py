@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QUrl, QMimeData
@@ -16,7 +17,8 @@ from PyQt6.QtGui import (
     QTextImageFormat,
     QTextFormat,
 )
-from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtWidgets import QCompleter, QTextEdit
+from PyQt6.QtCore import QStringListModel
 
 from .md_to_qdoc import (
     BLOCK_KIND,
@@ -47,6 +49,7 @@ class MarkdownEditor(QTextEdit):
     imagePasted = pyqtSignal(object)  # QImage
     fileDropped = pyqtSignal(str)  # absolute source path (non-image)
     autoSaveRequested = pyqtSignal()
+    escapePressed = pyqtSignal()
 
     IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
@@ -71,6 +74,21 @@ class MarkdownEditor(QTextEdit):
         self._autosave_timer.setSingleShot(True)
         self._autosave_timer.timeout.connect(self._emit_autosave)
         self.textChanged.connect(self._on_text_changed_for_autosave)
+        # Autocomplete state
+        self._completer: QCompleter | None = None
+        self._completer_mode: str | None = None  # "wiki" | "tag"
+        self._completer_prefix_start: int = -1
+        self._all_pages: list[str] = []
+        self._all_tags: list[str] = []
+        self._setup_completer()
+        from .live_reparse import LiveReparser
+        self._live_reparser = LiveReparser(self, delay_ms=200)
+
+    def set_live_reparse_enabled(self, on: bool) -> None:
+        self._live_reparser.set_enabled(on)
+
+    def live_reparse_now(self) -> None:
+        self._live_reparser._do_reparse()
 
     def set_autosave_interval_ms(self, ms: int) -> None:
         self._autosave_ms = int(ms)
@@ -138,6 +156,124 @@ class MarkdownEditor(QTextEdit):
         if self._loading:
             return
         self._set_dirty(modified)
+
+    # ---- autocomplete ----
+
+    def _setup_completer(self) -> None:
+        c = QCompleter(self)
+        c.setWidget(self)
+        c.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        c.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        c.setModel(QStringListModel([], self))
+        c.activated.connect(self._on_completer_activated)
+        self._completer = c
+
+    def set_completion_sources(self, pages: list[str], tags: list[str]) -> None:
+        self._all_pages = list(pages)
+        self._all_tags = list(tags)
+
+    def _active_prefix(self) -> tuple[str, str, int] | None:
+        """Return (mode, prefix, start_pos) if cursor is inside a completable token.
+
+        - wiki: starts when we see `[[` to the left of cursor on the current line,
+          and there's no `]]` between `[[` and cursor.
+        - tag: starts when we see `#` preceded by start-of-word, and no whitespace
+          between `#` and cursor.
+        """
+        cursor = self.textCursor()
+        block_text = cursor.block().text()
+        pos_in_block = cursor.positionInBlock()
+        before = block_text[:pos_in_block]
+        # wiki
+        idx = before.rfind("[[")
+        if idx != -1:
+            between = before[idx + 2:]
+            if "]]" not in between and "\n" not in between and "[[" not in between:
+                return ("wiki", between, cursor.position() - len(between))
+        # tag
+        m = None
+        for mm in re.finditer(r"(?:(?<=^)|(?<=[\s(\[]))#([A-Za-z][\w-]*)", before):
+            m = mm
+        if m is not None and m.end() == len(before):
+            prefix = m.group(1)
+            return ("tag", prefix, cursor.position() - len(prefix))
+        return None
+
+    def _update_completer(self) -> None:
+        if self._completer is None:
+            return
+        info = self._active_prefix()
+        if info is None:
+            self._completer.popup().hide()
+            self._completer_mode = None
+            return
+        mode, prefix, start = info
+        source = self._all_pages if mode == "wiki" else self._all_tags
+        if not source:
+            self._completer.popup().hide()
+            return
+        self._completer_mode = mode
+        self._completer_prefix_start = start
+        self._completer.model().setStringList(source)
+        self._completer.setCompletionPrefix(prefix)
+        popup = self._completer.popup()
+        popup.setCurrentIndex(self._completer.completionModel().index(0, 0))
+        rect = self.cursorRect()
+        rect.setWidth(
+            popup.sizeHintForColumn(0)
+            + popup.verticalScrollBar().sizeHint().width()
+        )
+        self._completer.complete(rect)
+
+    def _on_completer_activated(self, text: str) -> None:
+        if self._completer_mode is None or self._completer_prefix_start < 0:
+            return
+        cur = self.textCursor()
+        # Replace from prefix_start to current cursor with the full completion.
+        cur.setPosition(self._completer_prefix_start)
+        cur.movePosition(
+            QTextCursor.MoveOperation.Right,
+            QTextCursor.MoveMode.KeepAnchor,
+            self.textCursor().position() - self._completer_prefix_start,
+        )
+        cur.insertText(text)
+        if self._completer_mode == "wiki":
+            # Ensure closing ]] present after the insertion
+            pos = cur.position()
+            block = cur.block()
+            block_text = block.text()
+            pos_in_block = pos - block.position()
+            after = block_text[pos_in_block:]
+            if not after.startswith("]]"):
+                cur.insertText("]]")
+        self._completer_mode = None
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        popup_visible = (
+            self._completer is not None
+            and self._completer.popup().isVisible()
+        )
+        if popup_visible and e.key() in (
+            Qt.Key.Key_Enter,
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Tab,
+        ):
+            idx = self._completer.popup().currentIndex()
+            if idx.isValid():
+                self._on_completer_activated(idx.data())
+                self._completer.popup().hide()
+                e.accept()
+                return
+        if popup_visible and e.key() == Qt.Key.Key_Escape:
+            self._completer.popup().hide()
+            e.accept()
+            return
+        if e.key() == Qt.Key.Key_Escape:
+            self.escapePressed.emit()
+        super().keyPressEvent(e)
+        if self._loading:
+            return
+        self._update_completer()
 
     # ---- formatting toggles ----
 

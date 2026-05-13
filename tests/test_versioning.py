@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from PyQt6.QtCore import QSettings
+
+from qnotebook import versioning
+from qnotebook.window import MainWindow
+
+
+def _has_git() -> bool:
+    try:
+        subprocess.run(["git", "--version"], check=True, capture_output=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
+pytestmark = pytest.mark.skipif(not _has_git(), reason="git not installed")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings(tmp_path_factory):
+    d = tmp_path_factory.mktemp("qsettings-ver")
+    QSettings.setPath(
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(d)
+    )
+    s = QSettings("qnotebook", "qnotebook")
+    s.clear()
+    s.sync()
+    yield
+
+
+def test_init_and_commit_page(tmp_notebook: Path):
+    assert versioning.init_repo(tmp_notebook)
+    assert versioning.is_repo(tmp_notebook)
+    assert versioning.commit_page(tmp_notebook, "Home")
+    assert versioning.commit_count(tmp_notebook) == 1
+
+
+def test_commit_noop_when_clean(tmp_notebook: Path):
+    versioning.init_repo(tmp_notebook)
+    versioning.commit_page(tmp_notebook, "Home")
+    # Second commit with no changes should be a no-op (returns False)
+    assert not versioning.commit_page(tmp_notebook, "Home")
+
+
+def test_window_save_commits_when_versioning_on(qapp, tmp_notebook: Path, qtbot):
+    w = MainWindow()
+    w.open_notebook(str(tmp_notebook))
+    qtbot.addWidget(w)
+    w.act_toggle_versioning.setChecked(True)
+    w._toggle_versioning(True)
+    assert versioning.is_repo(tmp_notebook)
+    w.load_page("Home")
+    from PyQt6.QtGui import QTextCursor
+    cur = w.editor.textCursor()
+    cur.movePosition(QTextCursor.MoveOperation.End)
+    cur.insertText("\n\nextra line\n")
+    qapp.processEvents()
+    before = versioning.commit_count(tmp_notebook)
+    w._save_current()
+    after = versioning.commit_count(tmp_notebook)
+    assert after == before + 1
