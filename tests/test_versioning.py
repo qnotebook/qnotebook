@@ -48,6 +48,30 @@ def test_commit_noop_when_clean(tmp_notebook: Path):
     assert not versioning.commit_page(tmp_notebook, "Home")
 
 
+def test_commit_page_includes_rung_in_message(tmp_notebook: Path):
+    versioning.init_repo(tmp_notebook)
+    (tmp_notebook / "Home.md").write_text("hello\n")
+    assert versioning.commit_page(tmp_notebook, "Home", rung="trivial")
+    res = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=str(tmp_notebook), capture_output=True, text=True,
+    )
+    assert "[trivial]" in res.stdout
+
+
+def test_nb_settings_default_versioning_on_for_new_notebooks(tmp_path: Path):
+    from qnotebook import nb_settings
+    assert nb_settings.is_new_notebook(tmp_path)
+    assert nb_settings.get(tmp_path, "versioning_enabled") is True
+
+
+def test_nb_settings_roundtrip(tmp_path: Path):
+    from qnotebook import nb_settings
+    nb_settings.set_value(tmp_path, "versioning_enabled", False)
+    assert nb_settings.get(tmp_path, "versioning_enabled") is False
+    assert not nb_settings.is_new_notebook(tmp_path)
+
+
 def test_window_save_commits_when_versioning_on(qapp, tmp_notebook: Path, qtbot):
     w = MainWindow()
     w.open_notebook(str(tmp_notebook))

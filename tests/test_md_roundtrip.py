@@ -49,6 +49,16 @@ SAMPLES = [
     pytest.param("At start: #todo then later #done.\n", id="tag-mid-line"),
     pytest.param("Inline equation $E=mc^2$ here.\n", id="inline-eq"),
     pytest.param("Block math $$\\sum_{i=1}^n i$$ middle.\n", id="block-eq"),
+    # Obsidian-compat samples — unchanged plain-text passthrough expected
+    pytest.param("Some ==highlighted text== here.\n", id="obs-highlight"),
+    pytest.param("Before %% hidden comment %% after.\n", id="obs-percent-comment"),
+    pytest.param("Line with block id. ^block-abc\n", id="obs-block-id"),
+    pytest.param("rating:: 8\n", id="obs-dataview-inline"),
+    pytest.param("```dataview\nTABLE file.name\n```\n", id="obs-dataview-fence"),
+    pytest.param("- [ ] task 📅 2026-04-20 ⏫\n", id="obs-task-meta"),
+    pytest.param("![[embed.png|200x100]]\n", id="obs-image-embed"),
+    pytest.param("[[Page#heading]]\n", id="obs-heading-link"),
+    pytest.param("[[Page#^blockid]]\n", id="obs-blockref-link"),
 ]
 
 

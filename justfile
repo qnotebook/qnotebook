@@ -72,6 +72,10 @@ test-file FILE:
 test-match PATTERN:
     QT_QPA_PLATFORM=offscreen python3 -m pytest tests/ -v -k "{{PATTERN}}" --tb=short
 
+# Report which SafeWriter merge-ladder rungs are live
+check-merge-tools:
+    @python3 -c "from qnotebook import safe_save as s; print(f'git merge-file: {s.HAS_GIT_MERGE_FILE}'); print(f'wiggle:         {s.HAS_WIGGLE}'); print(f'mergiraf:       {s.HAS_MERGIRAF}')"
+
 # Compile all Python (catches syntax errors)
 compile:
     python3 -m compileall -q qnotebook/ tests/

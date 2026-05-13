@@ -6,7 +6,45 @@
 files on disk. Heavily inspired by Zim Desktop Wiki, but written from scratch — no code shared,
 Python + PyQt6 + `markdown-it-py`.
 
-## Scope (v0.5.0 — wave 3 complete)
+## Data safety (wave 5)
+
+All user-content writes flow through `qnotebook/safe_save.py`:
+
+- `SafeWriter.atomic_write(path, bytes)` — same-dir tempfile + fsync + `os.replace`.
+- `SafeWriter.save(path, E, load_result)` runs a merge ladder:
+  1. **trivial** — disk hash unchanged since load → write directly.
+  2. **disjoint-hunks** (pure Python) — union of non-overlapping line edits.
+  3. **git merge-file -p --diff3** — canonical 3-way merge.
+  4. **wiggle** (optional) — fuzzy patch apply.
+  5. **mergiraf** (optional) — structural / tree-aware merge.
+  6. **whitespace-only** — fall back to ours silently if remaining conflict is pure whitespace / CRLF.
+  7. **round-trip guard** — reject any would-be merge that markdown-it can't re-parse.
+  8. **conflict** — surface `SaveResult(status="conflict", base/ours/theirs)` to the 3-pane `MergeDialog`.
+
+Chosen rung is logged to `.qnotebook/merge.log` and appears in the commit
+message tag `edit: <page> [<rung>]` when versioning is on. Pre-save
+snapshots (last 10 per page) live under `.qnotebook/snapshots/<page-hash>/`.
+
+Syncthing conflict files (`*.sync-conflict-*`) are detected at notebook
+open and via a `QFileSystemWatcher`; the "Syncthing Conflict Resolver"
+bundled plugin surfaces them.
+
+Optional tools auto-detected via `shutil.which`:
+
+- `git` (HAS_GIT_MERGE_FILE)
+- `wiggle` (HAS_WIGGLE)
+- `mergiraf` at `~/.cargo/bin/mergiraf` (HAS_MERGIRAF)
+
+## CLI
+
+`qnotebook` (from `[project.scripts]`) + `python -m qnotebook` both dispatch to
+`qnotebook.cli:run` when any `--flag` is present. Headless commands never
+construct `QApplication`. See `qnotebook/cli.py` for the full surface —
+`--list-pages`, `--search`, `--export`, `--export-all`, `--index-rebuild`,
+`--new-page`, `--append`, `--append-today` with `--bullet`/`--timestamp`/
+`--heading`/`--stdin`/`--link`/`--template`.
+
+## Scope (v0.6.0 — wave 5 complete)
 
 - Open a notebook: any directory with `.md` files.
 - Tree of pages with lazy-loaded children (directory hierarchy).
@@ -283,7 +321,69 @@ spans. Rebuilt on notebook open; incrementally updated on save.
   the tree's model for a flat list of pages sorted by mtime
   (most-recent first). Mutually exclusive with "Show: Page Tree".
 
-## Explicitly deferred features (wave 4+)
+## Features added in v0.6 (wave 4)
+
+- **YAML frontmatter** (`qnotebook/frontmatter.py`): pages starting with
+  `---\\n<yaml>\\n---\\n` have their keys parsed into a dict and preserved
+  through the round-trip (key order intact). Supported keys: `title`,
+  `aliases`, `tags`, `created`, `modified`. `title` overrides the tree
+  basename. `aliases` are resolvable by the index (`Index.resolve_alias`);
+  `[[MyAlias]]` wikilinks follow the alias. Frontmatter tags merge into the
+  regular `#tag` index. PyYAML-optional (`HAS_YAML`): falls back to a tiny
+  hand-rolled parser for string scalars + flow/block lists of strings.
+- **Heading-targeted wikilinks**: `[[Page#Heading]]` opens `Page` and
+  scrolls to the first matching heading. `[[Page#Heading|alias]]` works.
+  `[[#Heading]]` stays on the current page. `extract_wikilinks` strips the
+  anchor when indexing forward-links; `rewrite_wikilinks` preserves the
+  anchor across page renames.
+- **Transclusion `{{Page}}` / `{{Page#Heading}}`**: inline-includes another
+  page's content (or a heading section) as a read-only styled child block
+  in the editor (italic gray placeholder + gray indented content). Loop
+  guard via a `seen` set. Source is preserved verbatim on save
+  (`BLOCK_TRANSCLUSION` + `BLOCK_TRANSCLUDED_CHILD` block properties).
+- **Split view**: View → Split → Horizontal / Vertical / Close. Up to two
+  editor panes inside a `QSplitter`; tree + docks stay shared. Secondary
+  pane mirrors the current page on creation.
+- **Session restore** (`qnotebook/session.py`): `.qnotebook/session.json` stores
+  current page + cursor + split layout + dock visibility + find-bar state.
+  Toggleable via `QSettings["session_restore_enabled"]` (default on).
+- **Auto-reload on external change** (`qnotebook/watchdog.py`): a
+  `QFileSystemWatcher` on the open page reloads silently when clean, or
+  shows a keep-mine/reload/diff prompt when dirty. Re-arms after atomic
+  save (inotify invalidation).
+- **Footnotes**: `[^label]` references render as a blue superscript span
+  (click scrolls to the matching `[^label]:` block); the definition block
+  is tagged with `BLOCK_FOOTNOTE_DEF`. Round-trip preserves both.
+- **Import from Zim wiki** (`qnotebook/importers/zim_wiki.py`): File →
+  Import → From Zim notebook. Walks a Zim `.txt` tree and writes markdown
+  equivalents (headings, italic, underline→bold, images, checkbox lists,
+  plain bullets). Strips the `Content-Type` header.
+- **Command palette** (`qnotebook/command_palette.py`): Ctrl+Shift+P opens a
+  fuzzy-searchable list of every menu action. Print shortcut moved to
+  Ctrl+Alt+P.
+- **Statistics dashboard** (`qnotebook/statistics.py`): Tools → Statistics.
+  Modal with total pages/words/chars/tags/links, most-linked, orphans,
+  most-tagged, and a 30-day activity bar chart on `QGraphicsScene`.
+- **Reveal in file manager / Open terminal here**: tree right-click and
+  notebook-root context entries. Uses `xdg-open` for reveal; terminal
+  detection honors `$TERMINAL`, then tries gnome-terminal / konsole /
+  xfce4-terminal / xterm.
+- **Keyboard tree navigation**: Alt+Down/Up move selection, Alt+Right
+  expands, Alt+Shift+Left collapses (Alt+Left is history-back), Alt+Enter
+  opens the selected page and leaves focus in the editor.
+- **Live TOC anchor list**: `[[!TOC]]` now also emits one read-only child
+  block per heading (indented by level, blue anchor to
+  `qnotebook:#<heading>`) after the styled placeholder. Children are tagged
+  `BLOCK_TRANSCLUDED_CHILD` so they round-trip out.
+- **mdit-py-plugins tasklist** (`HAS_MDIT_TASKLISTS`): optional. Currently
+  the regex fallback remains the primary detector; when the plugin is
+  present it runs in addition (parity test passes either way).
+- **Session locks** (`qnotebook/locks.py`): on open we take a PID-stamped
+  lock at `.qnotebook/lock`. A live-PID collision triggers a read-only /
+  force-open / cancel prompt (see `MainWindow._prompt_lock_conflict`).
+  Re-opening the same notebook from the same PID reclaims the lock.
+
+## Explicitly deferred features (beyond wave 4)
 
 - **mdit-py-plugins tasklist extension.** We still detect `[ ]` / `[x]`
   ourselves on the first text token of a bullet-list item.

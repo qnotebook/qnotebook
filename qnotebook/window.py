@@ -642,6 +642,8 @@ class MainWindow(QMainWindow):
 
         self.act_page_history = QAction("Page &History...", self)
         self.act_page_history.triggered.connect(self._open_page_history)
+        self.act_snapshots = QAction("&Snapshots...", self)
+        self.act_snapshots.triggered.connect(self._open_snapshots)
 
         self.act_quick_note = QAction("&Quick Note", self)
         self.act_quick_note.setShortcut(QKeySequence("Ctrl+Alt+N"))
@@ -689,6 +691,7 @@ class MainWindow(QMainWindow):
         m_file.addAction(self.act_print)
         m_file.addSeparator()
         m_file.addAction(self.act_toggle_versioning)
+        m_file.addAction(self.act_snapshots)
         m_file.addSeparator()
         m_file.addAction(self.act_shortcuts)
         m_file.addSeparator()
@@ -1851,6 +1854,19 @@ class MainWindow(QMainWindow):
         )
         dlg.exec()
 
+    def _open_snapshots(self) -> None:
+        if self.notebook is None or self._current_page is None:
+            return
+        page_file = self.notebook.file_for(self._current_page)
+        from .snapshots_dialog import SnapshotsDialog
+        dlg = SnapshotsDialog(
+            self.notebook.root, page_file,
+            self.editor.markdown(),
+            on_restore=lambda: self.load_page(self._current_page),
+            parent=self,
+        )
+        dlg.exec()
+
     def _restore_page_text(self, text: str) -> None:
         if self.notebook is None or self._current_page is None:
             return
@@ -2122,7 +2138,8 @@ class MainWindow(QMainWindow):
         resdir = self._resources_dir_for_current()
         resdir.mkdir(parents=True, exist_ok=True)
         dst = _unique_path(resdir / src.name)
-        dst.write_bytes(src.read_bytes())
+        from . import safe_save
+        safe_save.atomic_write(dst, src.read_bytes())
         return f"_resources/{dst.name}"
 
     def _copy_image_bytes(self, image, default_name: str) -> str | None:
@@ -2151,7 +2168,8 @@ class MainWindow(QMainWindow):
         resdir = self._resources_dir_for_current()
         resdir.mkdir(parents=True, exist_ok=True)
         dst = _unique_path(resdir / src.name)
-        dst.write_bytes(src.read_bytes())
+        from . import safe_save
+        safe_save.atomic_write(dst, src.read_bytes())
         rel = f"_resources/{dst.name}"
         link_md = f"[{dst.name}]({rel})"
         self.editor.insert_text_at_cursor(link_md)

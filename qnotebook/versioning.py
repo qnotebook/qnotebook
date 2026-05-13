@@ -33,20 +33,24 @@ def init_repo(root: Path) -> bool:
     return is_repo(root)
 
 
-def commit_page(root: Path, page: str) -> bool:
-    """`git add -A && git commit -m "edit: <page>"`.
+def commit_page(root: Path, page: str, rung: str | None = None) -> bool:
+    """`git add -A && git commit -m "edit: <page> [<rung>]"`.
 
-    Initializes the repo if missing. Returns True iff a new commit was made."""
+    Initializes the repo if missing. Returns True iff a new commit was made.
+    ``rung`` is the SafeWriter merge rung — the commit log doubles as a
+    merge audit when included."""
     if not is_repo(root):
         if not init_repo(root):
             return False
     _run(["git", "add", "-A"], root)
-    # Check for staged changes; if none, commit would fail.
     status = _run(["git", "status", "--porcelain"], root)
     if not status.stdout.strip():
         return False
+    msg = f"edit: {page}"
+    if rung:
+        msg += f" [{rung}]"
     res = _run(
-        ["git", "commit", "-q", "-m", f"edit: {page}"],
+        ["git", "commit", "-q", "-m", msg],
         root,
     )
     return res.returncode == 0

@@ -80,7 +80,7 @@ class SpellHighlighter(QSyntaxHighlighter):
                 from pathlib import Path as _P
                 p = _P(self._personal_path)
                 p.parent.mkdir(parents=True, exist_ok=True)
-                with p.open("a", encoding="utf-8") as fh:
+                with p.open("a", encoding="utf-8") as fh:  # safe-writer-exempt: personal dict append
                     fh.write(word + "\n")
             except Exception:
                 pass

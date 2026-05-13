@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from . import safe_save
+from . import snapshots as _snapshots
+
 
 DOTDIR = ".qnotebook"
 
@@ -144,14 +147,24 @@ class Notebook:
         return f.read_text(encoding="utf-8")
 
     def save_page(self, page: str, md_text: str) -> None:
-        """Atomic save: write `page.md.tmp` then rename over the target."""
+        """Atomic save via SafeWriter.atomic_write (same-dir tempfile + fsync).
+
+        Takes a pre-save snapshot of the current on-disk bytes so recent
+        states are recoverable from File → Snapshots."""
         f = self.file_for(page)
-        f.parent.mkdir(parents=True, exist_ok=True)
-        # Normalize: single trailing newline
+        if f.is_file():
+            try:
+                _snapshots.take_snapshot(self.root, f)
+            except Exception:
+                pass
         text = md_text.rstrip("\n") + "\n" if md_text else ""
-        tmp = f.with_suffix(f.suffix + ".tmp")
-        tmp.write_text(text, encoding="utf-8")
-        tmp.replace(f)
+        safe_save.atomic_write(f, text.encode("utf-8"))
+
+    def snapshots(self, page: str) -> list["_snapshots.Snapshot"]:
+        return _snapshots.list_snapshots(self.root, self.file_for(page))
+
+    def restore_snapshot(self, snap: "_snapshots.Snapshot") -> None:
+        _snapshots.restore(self.root, snap)
 
     def create_page(self, page: str, initial: str = "") -> PageRef:
         if self.exists(page):
