@@ -941,7 +941,19 @@ class MainWindow(QMainWindow):
                 self.model.refresh()
                 self.tree.setModel(self.model)
         text = self.notebook.get_page(page_path)
-        self._page_load_result[page_path] = self.notebook.load_for_save(page_path)
+        # Defensive: if the editor is still dirty on the same page (e.g. a
+        # programmatic reload triggered without going through save/discard),
+        # don't clobber the original LoadResult — keep the pre-load baseline
+        # so a subsequent save runs a correct 3-way merge instead of
+        # snapshotting the external state as the new base.
+        preserve_lr = (
+            page_path in self._page_load_result
+            and self._current_page == page_path
+            and self.editor.is_dirty()
+        )
+        if not preserve_lr:
+            self._page_load_result[page_path] = self.notebook.load_for_save(
+                page_path)
         self.editor.load_markdown(
             text, page_path=page_path,
             base_path=self.notebook.file_for(page_path).parent,
@@ -1312,6 +1324,9 @@ class MainWindow(QMainWindow):
             base_path=self.notebook.file_for(page).parent,
             transclusion_resolver=self._make_transclusion_resolver(page),
         )
+        # Baseline is now disk — next save's 3-way merge must use fresh bytes,
+        # not the pre-external-change snapshot.
+        self._page_load_result[page] = self.notebook.load_for_save(page)
 
     def _external_change_prompt(self) -> None:
         from PyQt6.QtWidgets import QMessageBox

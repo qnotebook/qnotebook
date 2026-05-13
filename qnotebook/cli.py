@@ -171,9 +171,26 @@ def cmd_append(notebook: str, page: str, text: str, *,
     if link:
         line += f" [[{link}]]"
 
-    existing = nb.get_page(page) if nb.exists(page) else ""
+    # Load-then-modify-then-save through the merge ladder so a concurrent
+    # GUI save (or another external writer) that lands between our read and
+    # our write is detected as drift and merged rather than clobbered.
+    if nb.exists(page):
+        lr = nb.load_for_save(page)
+        existing = lr.original.decode("utf-8", errors="replace")
+    else:
+        lr = None
+        existing = ""
     new_body = _append_to_body(existing, line, heading=heading)
-    nb.save_page(page, new_body)
+    result = nb.save_page(page, new_body, load_result=lr)
+    if result.conflict:
+        # Surface an unmerged conflict as a `.md.conflict` sibling and
+        # report exit code 3 so scripts can detect it. The original disk
+        # bytes are preserved.
+        conflict_path = nb.file_for(page).with_suffix(".md.conflict")
+        from . import safe_save as _ss
+        _ss.atomic_write(conflict_path, result.ours)
+        print(f"conflict: wrote {conflict_path}", file=sys.stderr)
+        return 3
     _forward_reload(nb.root, page)
     print(str(nb.file_for(page)))
     return 0
