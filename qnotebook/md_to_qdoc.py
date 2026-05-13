@@ -502,7 +502,14 @@ def markdown_to_qdoc(
             # Check parent: a list_item's first paragraph
             if list_stack and list_stack[-1][0] == "ul":
                 children = inline.children or []
-                if children and children[0].type == "text":
+                if (children and children[0].type == "html_inline"
+                        and "task-list-item-checkbox" in children[0].content):
+                    is_task = True
+                    task_state = 1 if "checked" in children[0].content else 0
+                    children.pop(0)
+                    if children and children[0].type == "text":
+                        children[0].content = children[0].content.lstrip()
+                elif children and children[0].type == "text":
                     m = re.match(r"^\[([ xX])\]\s+", children[0].content)
                     if m:
                         is_task = True
