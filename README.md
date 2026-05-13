@@ -6,8 +6,8 @@ Heavily inspired by Zim Desktop Wiki, but written from the ground up in PyQt6 ov
 ## Quick start
 
 ```bash
-just install-deps             # PyQt6 + pytest-qt + markdown-it-py
-just verify                   # PyQt6 + markdown-it-py sanity check
+just install-deps             # PyQt6 + pytest-qt + mistune
+just verify                   # PyQt6 + mistune sanity check
 just run /path/to/notebook    # launch app (or pick a dir at startup)
 just test                     # full offscreen test suite
 ```
@@ -40,7 +40,7 @@ MyNotebook/
 ## Dependencies
 
 - `PyQt6`
-- `markdown-it-py`
+- `mistune` (v3+)
 - `pytest`, `pytest-qt` (tests)
 
 ## Tests

@@ -61,7 +61,7 @@ def test_disjoint_external_edit_merges(tmp_path: Path, name: str) -> None:
 
 
 def test_highlight_plain_text_roundtrip(tmp_path: Path) -> None:
-    # ==highlight== is not parsed by markdown-it-commonmark so it survives
+    # ==highlight== is not parsed by mistune's CommonMark core so it survives
     # as literal text — verify via the Notebook path.
     from qnotebook.notebook import Notebook
     nb = Notebook(tmp_path)

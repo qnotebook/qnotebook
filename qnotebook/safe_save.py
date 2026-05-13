@@ -352,14 +352,14 @@ def _whitespace_only_diff(a: bytes, b: bytes) -> bool:
 
 
 def _roundtrip_parses(data: bytes) -> bool:
-    """Best-effort: will markdown-it parse this without exploding?"""
+    """Best-effort: will the parser accept this without exploding?"""
     try:
-        from markdown_it import MarkdownIt
+        import mistune
     except Exception:
         return True  # no parser available — don't block
     try:
-        md = MarkdownIt("commonmark")
-        md.parse(data.decode("utf-8", errors="replace"))
+        md = mistune.create_markdown(renderer=None)
+        md(data.decode("utf-8", errors="replace"))
         return True
     except Exception:
         return False

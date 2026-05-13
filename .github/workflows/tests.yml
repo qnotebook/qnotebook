@@ -45,14 +45,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install \
             "PyQt6>=6.5" \
-            "markdown-it-py>=3" \
+            "mistune>=3.0" \
             pytest pytest-qt \
             PyYAML \
             Pygments \
             matplotlib \
             networkx \
-            pyenchant \
-            mdit-py-plugins
+            pyenchant
 
       - name: Cache cargo binaries
         id: cargo-cache
@@ -77,7 +76,7 @@ jobs:
           mergiraf --version | head -1 || true
           echo "=== python packages ==="
           python -c "import PyQt6.QtCore; print('PyQt6', PyQt6.QtCore.QT_VERSION_STR)"
-          python -c "import markdown_it, yaml, pygments, matplotlib, networkx, enchant, mdit_py_plugins" \
+          python -c "import mistune, yaml, pygments, matplotlib, networkx, enchant" \
             && echo "all optional python deps importable"
 
       - name: Compile check

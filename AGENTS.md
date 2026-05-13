@@ -4,7 +4,7 @@
 
 **qnotebook** — a PyQt6 wiki editor with true WYSIWYG editing over markdown
 files on disk. Heavily inspired by Zim Desktop Wiki, but written from scratch — no code shared,
-Python + PyQt6 + `markdown-it-py`.
+Python + PyQt6 + `mistune`.
 
 ## Data safety (wave 5)
 
@@ -18,7 +18,7 @@ All user-content writes flow through `qnotebook/safe_save.py`:
   4. **wiggle** (optional) — fuzzy patch apply.
   5. **mergiraf** (optional) — structural / tree-aware merge.
   6. **whitespace-only** — fall back to ours silently if remaining conflict is pure whitespace / CRLF.
-  7. **round-trip guard** — reject any would-be merge that markdown-it can't re-parse.
+  7. **round-trip guard** — reject any would-be merge that mistune can't re-parse.
   8. **conflict** — surface `SaveResult(status="conflict", base/ours/theirs)` to the 3-pane `MergeDialog`.
 
 Chosen rung is logged to `.qnotebook/merge.log` and appears in the commit
@@ -133,13 +133,14 @@ idempotent (a fixed point) after the first save.
 
 This is the load-bearing property of the project.
 
-1. `md_to_qdoc.markdown_to_qdoc(md, doc)` parses with `markdown-it-py`
-   (commonmark + table + strikethrough) and walks tokens, inserting
-   styled runs into a `QTextDocument`. Block-level kind and extra data
-   (heading level, list kind, ordered-list start, code fence language,
-   task state, wikilink target) are stored on Qt formats as
-   `QTextFormat.Property.UserProperty + N` slots (constants defined at
-   the top of `md_to_qdoc.py`).
+1. `md_to_qdoc.markdown_to_qdoc(md, doc)` parses with `mistune` v3
+   (CommonMark + `table` + `strikethrough` + `task_lists` + `math` plugins,
+   plus locally-defined inline plugins for `[[wikilinks]]` and `#tags`)
+   and recursively walks the AST, inserting styled runs into a
+   `QTextDocument`. Block-level kind and extra data (heading level, list
+   kind, ordered-list start, code fence language, task state, wikilink
+   target) are stored on Qt formats as `QTextFormat.Property.UserProperty
+   + N` slots (constants defined at the top of `md_to_qdoc.py`).
 2. `qdoc_to_md.qdoc_to_markdown(doc)` walks `QTextBlock`s and fragments,
    reads those custom properties, and emits markdown.
 
@@ -305,7 +306,7 @@ spans. Rebuilt on notebook open; incrementally updated on save.
   into a paragraph block tagged with `BLOCK_TOC_MARKER` (UserProperty+14)
   and styled italic-blue. On serialize the marker round-trips back to
   `[[!TOC]]`. See `_preprocess_toc_markers` (sentinel-based to bypass
-  markdown-it's wikilink consumption).
+  the wikilink inline plugin's consumption).
 - **Quick note (Ctrl+Alt+N)**: tiny modal that appends
   `## YYYY-MM-DD HH:MM:SS\n<text>` to a `Scratch` page (created on first
   use). `MainWindow.append_to_scratch(text)` is the public entry point.
@@ -375,9 +376,9 @@ spans. Rebuilt on notebook open; incrementally updated on save.
   block per heading (indented by level, blue anchor to
   `qnotebook:#<heading>`) after the styled placeholder. Children are tagged
   `BLOCK_TRANSCLUDED_CHILD` so they round-trip out.
-- **mdit-py-plugins tasklist** (`HAS_MDIT_TASKLISTS`): optional. Currently
-  the regex fallback remains the primary detector; when the plugin is
-  present it runs in addition (parity test passes either way).
+- **Task lists**: handled natively by mistune's `task_lists` plugin. The
+  `HAS_MDIT_TASKLISTS` constant is kept (always `True`) for back-compat
+  with code that imported it from the markdown-it era.
 - **Session locks** (`qnotebook/locks.py`): on open we take a PID-stamped
   lock at `.qnotebook/lock`. A live-PID collision triggers a read-only /
   force-open / cancel prompt (see `MainWindow._prompt_lock_conflict`).
@@ -385,8 +386,6 @@ spans. Rebuilt on notebook open; incrementally updated on save.
 
 ## Explicitly deferred features (beyond wave 4)
 
-- **mdit-py-plugins tasklist extension.** We still detect `[ ]` / `[x]`
-  ourselves on the first text token of a bullet-list item.
 - **Force-directed layout polish**: spring layout uses a fixed seed; no
   animated relaxation, no per-edge weights, no clustering.
 - **Equation editor UX**: no toolbar button to insert `$..$`; rendering
@@ -403,7 +402,7 @@ spans. Rebuilt on notebook open; incrementally updated on save.
 
 ```bash
 just run /path/to/notebook  # launch (needs X display)
-just verify                 # PyQt6 + markdown-it-py sanity check
+just verify                 # PyQt6 + mistune sanity check
 just test                   # full suite per-file (offscreen)
 just test-fast              # full suite in one process
 just test-file FILE=...     # single file
@@ -417,7 +416,7 @@ System (openSUSE / Debian / Fedora auto-detected by `just install-deps`):
 
 - `PyQt6`
 - `pytest` + `pytest-qt`
-- `markdown-it-py` (v3+ / v4 works)
+- `mistune` (v3+)
 
 No GObject, no GTK, no `pyxdg`.
 
@@ -506,7 +505,7 @@ No GObject, no GTK, no `pyxdg`.
   serializer's bold-fragment → `**…**` round-trip would otherwise emit
   `****bold****`.
 - **HTML export pre-processor.** We rewrite `[[Page]]` and `#tag` to
-  raw HTML *before* handing to `markdown-it-py` with `html=True`. Code
+  raw HTML *before* handing to mistune with `escape=False`. Code
   fences and inline code spans are excluded so `` `[[X]]` `` stays
   literal. Relative hrefs are computed by counting the source page's
   `:` depth and prefixing `../`.
@@ -552,13 +551,13 @@ No GObject, no GTK, no `pyxdg`.
 - **TOC marker pre-processing.** `[[!TOC]]` matches `WIKILINK_RE` and
   would otherwise be consumed as a wikilink with target `!TOC`. The
   pre-processor replaces the literal line with `QNOTEBOOKTOCMARKERLINE`
-  before handing to markdown-it, then post-processes the resulting block
-  to set `BLOCK_TOC_MARKER` and re-insert the styled `[[!TOC]]` text.
-  Lines inside fenced code are left alone.
-- **Equations on inline parser.** `$..$` and `$$..$$` are detected in
-  `_emit_with_equations` (called from the same pipeline as wikilinks /
-  tags). Block equations are matched first (greedy `$$..$$`) so they
-  don't get mangled by inline `$..$` matching.
+  before parsing, then post-processes the resulting block to set
+  `BLOCK_TOC_MARKER` and re-insert the styled `[[!TOC]]` text. Lines
+  inside fenced code are left alone.
+- **Equations via mistune `math` plugin.** `$..$` is parsed as
+  `inline_math` and `$$\n..\n$$` standalone as `block_math`. Inline
+  `$$..$$` (no surrounding newlines) parses as text-`$` + `inline_math`
+  + text-`$`, which still round-trips correctly through the serializer.
 - **Equation property numbers.** `EQ_LATEX = UserProperty+20`, `EQ_DISPLAY = UserProperty+21`.
   These intentionally sit above the existing `BLOCK_*` / `CHAR_*` slots
   to leave room for incremental additions.

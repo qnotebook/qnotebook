@@ -1,8 +1,9 @@
 """Debounced live per-block re-parse for inline markdown formatting.
 
-Parses the current block's plain text with markdown-it's inline parser
-and reapplies character formats in place, preserving the cursor position
-and selection. Leaves block-level formatting (heading/list/code) untouched.
+Reapplies character formats to the current block in place, preserving the
+cursor position and selection. Leaves block-level formatting (heading/list/
+code) untouched. Uses a small hand-rolled inline scanner rather than going
+through the full markdown parser, so it stays fast on every keystroke.
 """
 
 from __future__ import annotations
@@ -11,8 +12,6 @@ from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, QTimer, Qt
 from PyQt6.QtGui import QColor, QFont, QTextBlock, QTextCharFormat, QTextCursor
-
-from markdown_it import MarkdownIt
 
 from .md_to_qdoc import (
     BLOCK_KIND,

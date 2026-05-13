@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Callable
 
-from markdown_it import MarkdownIt
+import mistune
 
 from .notebook import Notebook, page_to_relpath
 
@@ -194,10 +194,12 @@ def _rewrite_tags_segment(seg: str) -> str:
 
 def _render_body(md_text: str, from_page: str | None, known_pages: set[str] | None) -> str:
     preprocessed = _preprocess_wikilinks_and_tags(md_text, from_page, known_pages)
-    md = MarkdownIt("commonmark", {"html": True, "breaks": False, "linkify": False}).enable(
-        ["table", "strikethrough"]
+    md = mistune.create_markdown(
+        renderer="html",
+        plugins=["table", "strikethrough", "task_lists", "footnotes", "math"],
+        escape=False,
     )
-    return md.render(preprocessed)
+    return md(preprocessed)
 
 
 def _sidebar(pages: list[str], current: str | None) -> str:

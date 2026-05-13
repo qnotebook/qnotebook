@@ -263,9 +263,10 @@ def test_footnote_reference_char_property(qapp):
     assert str(cur.charFormat().property(CHAR_FOOTNOTE_REF) or "") == "x"
 
 
-def test_mdit_tasklists_flag_present():
+def test_task_lists_supported():
+    # mistune's task_lists plugin is a hard dep; the bool stays for back-compat.
     from qnotebook.md_to_qdoc import HAS_MDIT_TASKLISTS
-    assert isinstance(HAS_MDIT_TASKLISTS, bool)
+    assert HAS_MDIT_TASKLISTS is True
 
 
 def test_task_list_roundtrip_without_plugin(qapp):

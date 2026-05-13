@@ -22,27 +22,27 @@ install-deps:
         sudo zypper install -y \
             $PY-PyQt6 $PY-PyQt6-devel \
             $PY-pytest $PY-pytest-qt \
-            $PY-markdown-it-py $PY-Pillow
+            $PY-mistune $PY-Pillow
     elif command -v apt-get >/dev/null; then
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
             python3-pyqt6 python3-pyqt6.qtsvg \
             python3-pytest python3-pytest-qt \
-            python3-markdown-it python3-pil
+            python3-mistune python3-pil
     elif command -v dnf >/dev/null; then
         sudo dnf install -y \
             python3-pyqt6 python3-pyqt6-devel \
             python3-pytest python3-pytest-qt \
-            python3-markdown-it-py python3-pillow
+            python3-mistune python3-pillow
     else
         echo "Unknown distribution."
         exit 1
     fi
 
-# Sanity-check environment: PyQt6 + markdown-it-py present
+# Sanity-check environment: PyQt6 + mistune present
 verify:
     @python3 -c "from PyQt6.QtCore import QT_VERSION_STR; print(f'PyQt6 / Qt: {QT_VERSION_STR}')"
-    @python3 -c "import markdown_it; print(f'markdown-it-py: {markdown_it.__version__}')"
+    @python3 -c "import mistune; print(f'mistune: {mistune.__version__}')"
     @python3 --version
 
 # Run the full test suite (offscreen Qt)

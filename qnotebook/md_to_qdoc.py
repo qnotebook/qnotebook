@@ -4,17 +4,21 @@ Each block stores a `UserProperty` with its block kind so the serializer
 can reconstruct markdown without guessing. Inline character formats use
 standard Qt attributes (bold, italic, etc.) plus anchor href for links.
 Wikilinks use href `qnotebook:<Target>`; regular links use their URL as-is.
+
+Parser: mistune v3, with built-in `table`/`strikethrough`/`task_lists`/`math`
+plugins plus locally-defined inline plugins for `[[wikilinks]]` and `#tags`.
+Block-level project markers (`[[!TOC]]`, `{{transclusion}}`) are sentinel-
+preprocessed before parsing and re-tagged on the QTextDocument afterwards.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
-
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QUrl
+import mistune
+from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -28,14 +32,6 @@ from PyQt6.QtGui import (
     QTextListFormat,
     QTextTableFormat,
 )
-from markdown_it import MarkdownIt
-
-try:
-    from mdit_py_plugins.tasklists import tasklists_plugin  # type: ignore
-    HAS_MDIT_TASKLISTS = True
-except Exception:
-    tasklists_plugin = None  # type: ignore
-    HAS_MDIT_TASKLISTS = False
 
 
 # Qt User properties on blocks — all values are strings/ints for portability.
@@ -51,13 +47,22 @@ CHAR_WIKILINK = QTextCharFormat.Property.UserProperty + 10  # str target
 CHAR_CODE = QTextCharFormat.Property.UserProperty + 11  # bool
 CHAR_IMAGE_ALT = QTextCharFormat.Property.UserProperty + 12  # str alt text for images
 CHAR_TAG = QTextCharFormat.Property.UserProperty + 13  # str tag name (e.g. "todo" for `#todo`)
-BLOCK_TOC_MARKER = QTextCharFormat.Property.UserProperty + 14  # bool: this paragraph is a [[!TOC]] marker
-BLOCK_TRANSCLUSION = QTextCharFormat.Property.UserProperty + 22  # str: transclusion source target e.g. "Foo" or "Foo#Heading"
-BLOCK_TRANSCLUDED_CHILD = QTextCharFormat.Property.UserProperty + 23  # bool: rendered included content, skipped on serialize
-BLOCK_FOOTNOTE_DEF = QTextCharFormat.Property.UserProperty + 24  # str: footnote label for a `[^label]: ...` block
-CHAR_FOOTNOTE_REF = QTextCharFormat.Property.UserProperty + 25  # str: footnote label for a `[^label]` reference
+BLOCK_TOC_MARKER = QTextCharFormat.Property.UserProperty + 14
+BLOCK_TRANSCLUSION = QTextCharFormat.Property.UserProperty + 22
+BLOCK_TRANSCLUDED_CHILD = QTextCharFormat.Property.UserProperty + 23
+BLOCK_FOOTNOTE_DEF = QTextCharFormat.Property.UserProperty + 24
+CHAR_FOOTNOTE_REF = QTextCharFormat.Property.UserProperty + 25
 
 IMAGE_MAX_WIDTH = 600
+
+# Kept for backwards compatibility with code that imported it from md_to_qdoc.
+# The mistune `task_lists` plugin is always available since mistune is a hard
+# dep, but the constant lets older callers keep their isinstance checks.
+HAS_MDIT_TASKLISTS = True
+
+
+WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
+TAG_INLINE_RE = re.compile(r"(?:(?<=^)|(?<=[\s(\[]))(#[A-Za-z][\w-]*)")
 
 
 def register_image_resource(doc: QTextDocument, rel_path: str, abs_path: str | None) -> None:
@@ -75,8 +80,9 @@ def register_image_resource(doc: QTextDocument, rel_path: str, abs_path: str | N
     )
 
 
-WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
-TAG_INLINE_RE = re.compile(r"(?:(?<=^)|(?<=[\s(\[]))(#[A-Za-z][\w-]*)")
+# --------------------------------------------------------------------
+# Block & char formats
+# --------------------------------------------------------------------
 
 
 def _heading_format(level: int) -> QTextBlockFormat:
@@ -139,19 +145,30 @@ def _hr_format() -> QTextBlockFormat:
     return fmt
 
 
+def _list_item_block_format(depth: int, is_task: bool, task_state: int) -> QTextBlockFormat:
+    fmt = QTextBlockFormat()
+    fmt.setProperty(BLOCK_KIND, "task" if is_task else "li")
+    fmt.setProperty(BLOCK_LEVEL, depth)
+    if is_task:
+        fmt.setProperty(BLOCK_TASK_STATE, task_state)
+    fmt.setTopMargin(2)
+    fmt.setBottomMargin(2)
+    return fmt
+
+
 @dataclass
 class _InlineStyle:
     bold: bool = False
     italic: bool = False
     strike: bool = False
     code: bool = False
-    link: str | None = None  # href (regular URL)
-    wikilink: str | None = None  # qnotebook target
-    tag: str | None = None  # when set, this run is a `#tag` token
-    image_src: str | None = None  # if set, this run is an image insertion
+    link: str | None = None
+    wikilink: str | None = None
+    tag: str | None = None
+    image_src: str | None = None
     image_alt: str = ""
-    equation: str | None = None  # if set, this run is a LaTeX equation
-    equation_display: bool = False  # True for `$$..$$`
+    equation: str | None = None
+    equation_display: bool = False
 
     def char_format(self) -> QTextCharFormat:
         f = QTextCharFormat()
@@ -189,6 +206,18 @@ class _InlineStyle:
         return f
 
 
+def _style_with(style: _InlineStyle, **changes) -> _InlineStyle:
+    new = _InlineStyle(**style.__dict__)
+    for k, v in changes.items():
+        setattr(new, k, v)
+    return new
+
+
+# --------------------------------------------------------------------
+# Renderer (cursor wrapper)
+# --------------------------------------------------------------------
+
+
 class _Renderer:
     def __init__(self, doc: QTextDocument, base_path: Path | None = None) -> None:
         self.doc = doc
@@ -210,8 +239,7 @@ class _Renderer:
             fmt = QTextCharFormat()
         self.cursor.insertText(text, fmt)
 
-    def insert_run(self, text: str, style: "_InlineStyle", base_fmt: QTextCharFormat | None = None) -> None:
-        """Insert a run; image runs become image fragments, others become text."""
+    def insert_run(self, text: str, style: _InlineStyle, base_fmt: QTextCharFormat | None = None) -> None:
         if style.image_src is not None:
             self._insert_image_run(style.image_src, style.image_alt)
             return
@@ -226,7 +254,6 @@ class _Renderer:
         img_fmt = QTextImageFormat()
         img_fmt.setName(src)
         img_fmt.setProperty(CHAR_IMAGE_ALT, alt)
-        # Resolve absolute path and register resource if the file exists.
         abs_path: str | None = None
         if self.base_path is not None:
             try:
@@ -253,578 +280,277 @@ class _Renderer:
         self.cursor.insertImage(img_fmt)
 
 
-def _parse_inline_children(children: list, style: _InlineStyle) -> list[tuple[str, _InlineStyle]]:
-    """Flatten inline tokens into (text, style) runs, handling wikilinks."""
+# --------------------------------------------------------------------
+# Inline plugins (wikilinks, tags)
+# --------------------------------------------------------------------
+
+# Mistune compiles every inline rule's regex into one giant alternation,
+# so every named group must be unique across all plugins. Prefix ours with
+# the rule name to stay safe.
+_WIKILINK_PATTERN = (
+    r"\[\[(?P<wikilink_target>[^\]\|]+?)"
+    r"(?:\|(?P<wikilink_alias>[^\]]+?))?\]\]"
+)
+# Match `#tag` only at start-of-string or after whitespace / `(` / `[`.
+_TAG_PATTERN = r"(?:(?<=^)|(?<=[\s(\[]))(?P<qntag_full>#[A-Za-z][\w-]*)"
+
+
+def _parse_wikilink(inline, m, state):
+    target = m.group("wikilink_target").strip()
+    alias = m.group("wikilink_alias")
+    display = alias.strip() if alias else target
+    state.append_token({
+        "type": "wikilink",
+        "raw": display,
+        "attrs": {"target": target},
+    })
+    return m.end()
+
+
+def _parse_tag(inline, m, state):
+    full = m.group("qntag_full")  # includes leading "#"
+    state.append_token({
+        "type": "tag",
+        "raw": full,
+        "attrs": {"name": full[1:]},
+    })
+    return m.end()
+
+
+def _wikilink_plugin(md: mistune.Markdown) -> None:
+    md.inline.register("wikilink", _WIKILINK_PATTERN, _parse_wikilink, before="link")
+
+
+def _tag_plugin(md: mistune.Markdown) -> None:
+    md.inline.register("tag", _TAG_PATTERN, _parse_tag)
+
+
+# --------------------------------------------------------------------
+# Inline walk
+# --------------------------------------------------------------------
+
+
+def _walk_inline(children: list[dict], style: _InlineStyle) -> list[tuple[str, _InlineStyle]]:
     out: list[tuple[str, _InlineStyle]] = []
-    stack: list[_InlineStyle] = [style]
-
-    def top() -> _InlineStyle:
-        return stack[-1]
-
-    def push(modify) -> None:
-        new = _InlineStyle(**top().__dict__)
-        modify(new)
-        stack.append(new)
-
-    i = 0
-    while i < len(children):
-        t = children[i]
-        typ = t.type
-        if typ == "text":
-            _emit_with_wikilinks(out, t.content, top())
-        elif typ == "strong_open":
-            push(lambda s: setattr(s, "bold", True))
-        elif typ == "strong_close":
-            stack.pop()
-        elif typ == "em_open":
-            push(lambda s: setattr(s, "italic", True))
-        elif typ == "em_close":
-            stack.pop()
-        elif typ == "s_open":
-            push(lambda s: setattr(s, "strike", True))
-        elif typ == "s_close":
-            stack.pop()
-        elif typ == "code_inline":
-            s = _InlineStyle(**top().__dict__)
-            s.code = True
-            out.append((t.content, s))
-        elif typ == "image":
-            src = t.attrGet("src") or ""
-            # alt is the concatenated text of the image's inline children
+    for node in children or []:
+        ntype = node.get("type")
+        if ntype == "text":
+            out.append((node.get("raw", ""), style))
+        elif ntype == "strong":
+            out.extend(_walk_inline(node.get("children", []), _style_with(style, bold=True)))
+        elif ntype == "emphasis":
+            out.extend(_walk_inline(node.get("children", []), _style_with(style, italic=True)))
+        elif ntype == "strikethrough":
+            out.extend(_walk_inline(node.get("children", []), _style_with(style, strike=True)))
+        elif ntype == "codespan":
+            out.append((node.get("raw", ""), _style_with(style, code=True)))
+        elif ntype == "link":
+            href = (node.get("attrs") or {}).get("url", "")
+            out.extend(_walk_inline(node.get("children", []), _style_with(style, link=href)))
+        elif ntype == "image":
+            url = (node.get("attrs") or {}).get("url", "")
             alt_parts: list[str] = []
-            for c in (t.children or []):
-                if c.type == "text":
-                    alt_parts.append(c.content)
-            alt_text = "".join(alt_parts) or (t.content or "")
-            s = _InlineStyle(**top().__dict__)
-            s.image_src = src
-            s.image_alt = alt_text
-            out.append(("", s))
-        elif typ == "link_open":
-            href = t.attrGet("href") or ""
-            push(lambda s, h=href: setattr(s, "link", h))
-        elif typ == "link_close":
-            stack.pop()
-        elif typ == "softbreak":
-            out.append(("\n", top()))
-        elif typ == "hardbreak":
-            out.append(("\n", top()))
-        elif typ == "html_inline":
-            out.append((t.content, top()))
-        i += 1
-    return out
-
-
-def _emit_with_wikilinks(out: list[tuple[str, _InlineStyle]], text: str, style: _InlineStyle) -> None:
-    """Emit a text run, splitting out [[wikilinks]] and `#tags`."""
-    pos = 0
-    for m in WIKILINK_RE.finditer(text):
-        if m.start() > pos:
-            _emit_with_tags(out, text[pos : m.start()], style)
-        target = m.group(1).strip()
-        alias = m.group(2)
-        display = alias.strip() if alias else target
-        s = _InlineStyle(**style.__dict__)
-        s.wikilink = target
-        out.append((display, s))
-        pos = m.end()
-    if pos < len(text):
-        _emit_with_tags(out, text[pos:], style)
-
-
-def _emit_with_tags(out: list[tuple[str, _InlineStyle]], text: str, style: _InlineStyle) -> None:
-    """Emit text, splitting `#tag` tokens into styled runs. Skips runs
-    already inside code/link context (those shouldn't be tagged)."""
-    if style.code or style.link is not None or style.wikilink is not None:
-        out.append((text, style))
-        return
-    pos = 0
-    for m in TAG_INLINE_RE.finditer(text):
-        if m.start() > pos:
-            _emit_with_equations(out, text[pos : m.start()], style)
-        tag_token = m.group(1)  # includes the leading `#`
-        s = _InlineStyle(**style.__dict__)
-        s.tag = tag_token[1:]
-        out.append((tag_token, s))
-        pos = m.end()
-    if pos < len(text):
-        _emit_with_equations(out, text[pos:], style)
-
-
-def _emit_with_equations(out: list[tuple[str, _InlineStyle]], text: str, style: _InlineStyle) -> None:
-    """Emit text, splitting LaTeX `$..$` and `$$..$$` runs."""
-    from .equations import find_equations_in_text
-    eqs = find_equations_in_text(text)
-    if not eqs:
-        out.append((text, style))
-        return
-    pos = 0
-    for s, e, latex, display in eqs:
-        if s > pos:
-            out.append((text[pos:s], style))
-        st = _InlineStyle(**style.__dict__)
-        st.equation = latex
-        st.equation_display = display
-        out.append((text[s:e], st))
-        pos = e
-    if pos < len(text):
-        out.append((text[pos:], style))
-
-
-_TOC_SENTINEL = "QNOTEBOOKTOCMARKERLINE"
-_TRANSCLUDE_SENTINEL_PREFIX = "QNOTEBOOKTRANSCLUDELINE"  # + N
-
-
-def _preprocess_transclusions(md_text: str) -> tuple[str, list[str]]:
-    """Replace `{{Target}}` lines with sentinel markers. Return (text, targets)."""
-    out_lines: list[str] = []
-    targets: list[str] = []
-    in_fence = False
-    import re as _re
-    pat = _re.compile(r"^\{\{([^{}\n]+)\}\}$")
-    for line in (md_text or "").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-            out_lines.append(line)
-            continue
-        m = pat.match(stripped) if not in_fence else None
-        if m:
-            idx = len(targets)
-            targets.append(m.group(1).strip())
-            out_lines.append(f"{_TRANSCLUDE_SENTINEL_PREFIX}{idx}")
-        else:
-            out_lines.append(line)
-    out = "\n".join(out_lines)
-    if md_text.endswith("\n"):
-        out += "\n"
-    return out, targets
-
-
-def _preprocess_toc_markers(md_text: str) -> str:
-    """Replace standalone `[[!TOC]]` lines with a plain-text sentinel that
-    survives markdown-it (so we can post-tag the block)."""
-    out_lines: list[str] = []
-    in_fence = False
-    for line in (md_text or "").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
-            out_lines.append(line)
-            continue
-        if not in_fence and stripped == "[[!TOC]]":
-            out_lines.append(_TOC_SENTINEL)
-        else:
-            out_lines.append(line)
-    out = "\n".join(out_lines)
-    if md_text.endswith("\n"):
-        out += "\n"
-    return out
-
-
-def markdown_to_qdoc(
-    md_text: str,
-    doc: QTextDocument,
-    base_path: Path | None = None,
-    transclusion_resolver=None,
-) -> None:
-    """Parse markdown and populate `doc` with styled blocks.
-
-    `base_path` is the directory the markdown source lives in. Used to
-    resolve relative image paths (e.g. `_resources/foo.png`). If omitted,
-    image pixels aren't loaded but their src/alt are preserved."""
-    doc.clear()
-    doc.setDefaultStyleSheet("")
-    # Remove default root-frame margins for cleaner layout.
-    root_fmt = QTextFrameFormat()
-    root_fmt.setMargin(0)
-    doc.rootFrame().setFrameFormat(root_fmt)
-
-    md = MarkdownIt("commonmark", {"html": False, "breaks": False, "linkify": False}).enable(
-        ["table", "strikethrough"]
-    )
-    # If the official mdit-py-plugins tasklist plugin is installed, use it
-    # to mark list-item tokens as tasks. Our fallback regex detection below
-    # still runs, but the plugin ensures first-class detection even with
-    # edge-case markers.
-    if HAS_MDIT_TASKLISTS and tasklists_plugin is not None:
-        try:
-            md = md.use(tasklists_plugin, enabled=True)
-        except Exception:
+            for c in node.get("children", []) or []:
+                if c.get("type") == "text":
+                    alt_parts.append(c.get("raw", ""))
+            alt = "".join(alt_parts) or node.get("raw", "")
+            out.append(("", _style_with(style, image_src=url, image_alt=alt)))
+        elif ntype == "wikilink":
+            display = node.get("raw", "")
+            target = (node.get("attrs") or {}).get("target", display)
+            out.append((display, _style_with(style, wikilink=target)))
+        elif ntype == "tag":
+            full = node.get("raw", "")
+            name = (node.get("attrs") or {}).get("name", full[1:] if full.startswith("#") else full)
+            out.append((full, _style_with(style, tag=name)))
+        elif ntype == "inline_math":
+            latex = node.get("raw", "")
+            out.append((f"${latex}$", _style_with(style, equation=latex, equation_display=False)))
+        elif ntype in ("softbreak", "linebreak"):
+            out.append(("\n", style))
+        elif ntype in ("inline_html", "block_html"):
+            out.append((node.get("raw", ""), style))
+        elif ntype == "blank_line":
             pass
-    # Split frontmatter so it doesn't render in the editor, but preserve it
-    # on the doc so the serializer can emit it back verbatim (key-order + all).
-    try:
-        from . import frontmatter as _fm_mod
-        _fm_data, md_text = _fm_mod.split(md_text or "")
-    except Exception:
-        _fm_data = {}
-    try:
-        doc._zimqt_frontmatter = _fm_data  # type: ignore[attr-defined]
-    except Exception:
-        pass
-    md_text = _preprocess_toc_markers(md_text or "")
-    md_text, _transclusion_targets = _preprocess_transclusions(md_text)
-    tokens = md.parse(md_text or "")
-    r = _Renderer(doc, base_path=base_path)
+        else:
+            # Unknown inline — fallback to text content if any.
+            children_inner = node.get("children")
+            if children_inner:
+                out.extend(_walk_inline(children_inner, style))
+            elif "raw" in node:
+                out.append((node.get("raw", ""), style))
+    return out
 
-    # Walk tokens with a small state machine
-    list_stack: list[tuple[str, int]] = []  # ("ul"|"ol", start_value_for_ol)
-    qlist_stack: list = []  # parallel stack of active QTextList (or None) for appending siblings
-    in_table = False
-    table_rows: list[list[str]] = []  # each row is list of cell markdown strings
-    current_row: list[str] = []
-    current_cell_tokens: list = []
-    in_cell = False
-    in_header = False
-    table_align: list[str] = []  # unused for now
 
-    i = 0
-    n = len(tokens)
-    while i < n:
-        t = tokens[i]
-        typ = t.type
-        if typ == "heading_open":
-            level = int(t.tag[1])
-            r.new_block(_heading_format(level), _heading_char_format(level))
-            inline = tokens[i + 1]
-            runs = _parse_inline_children(inline.children or [], _InlineStyle())
-            base = _heading_char_format(level)
-            for text, style in runs:
-                r.insert_run(text, style, base_fmt=base)
-            i += 3  # heading_open, inline, heading_close
-            continue
-        if typ == "paragraph_open":
-            # Detect task list item: inline starts with "[ ] " or "[x] "
-            inline = tokens[i + 1]
-            is_task = False
-            task_state = 0
-            # Check parent: a list_item's first paragraph
-            if list_stack and list_stack[-1][0] == "ul":
-                children = inline.children or []
-                if (children and children[0].type == "html_inline"
-                        and "task-list-item-checkbox" in children[0].content):
-                    is_task = True
-                    task_state = 1 if "checked" in children[0].content else 0
-                    children.pop(0)
-                    if children and children[0].type == "text":
-                        children[0].content = children[0].content.lstrip()
-                elif children and children[0].type == "text":
-                    m = re.match(r"^\[([ xX])\]\s+", children[0].content)
-                    if m:
-                        is_task = True
-                        task_state = 1 if m.group(1).lower() == "x" else 0
-                        children[0].content = children[0].content[m.end():]
-            # Create block
-            if list_stack:
-                fmt = _list_item_block_format(len(list_stack), is_task, task_state)
-            else:
-                fmt = _paragraph_format()
-            r.new_block(fmt)
-            if list_stack:
-                current_list = qlist_stack[-1] if qlist_stack else None
-                new_list = _apply_list_format(r.cursor, list_stack, current_list)
-                qlist_stack[-1] = new_list
-            runs = _parse_inline_children(inline.children or [], _InlineStyle())
-            for text, style in runs:
-                r.insert_run(text, style)
-            i += 3
-            continue
-        if typ == "bullet_list_open":
-            list_stack.append(("ul", 1))
-            qlist_stack.append(None)
-            i += 1
-            continue
-        if typ == "ordered_list_open":
-            start = int(t.attrGet("start") or 1)
-            list_stack.append(("ol", start))
-            qlist_stack.append(None)
-            i += 1
-            continue
-        if typ in ("bullet_list_close", "ordered_list_close"):
-            list_stack.pop()
-            qlist_stack.pop()
-            i += 1
-            continue
-        if typ in ("list_item_open", "list_item_close"):
-            i += 1
-            continue
-        if typ == "fence":
-            lang = t.info.strip()
-            content = t.content
-            if content.endswith("\n"):
-                content = content[:-1]
-            # Try Pygments token-based highlighting per line if a lang is set.
-            highlighted = _pygments_highlight(content, lang) if lang else None
-            if highlighted is not None:
-                for idx, line_tokens in enumerate(highlighted):
-                    fmt = _code_format()
-                    fmt.setProperty(BLOCK_CODE_LANG, lang)
-                    if idx == 0 and len(highlighted) > 1:
-                        fmt.setProperty(BLOCK_LEVEL, 1)
-                    r.new_block(fmt, _code_char_format())
-                    for tok_text, tok_color in line_tokens:
-                        f = _code_char_format()
-                        if tok_color:
-                            f.setForeground(QColor(tok_color))
-                        r.insert_text(tok_text, f)
-            else:
-                lines = content.split("\n") if content else [""]
-                for idx, line in enumerate(lines):
-                    fmt = _code_format()
-                    fmt.setProperty(BLOCK_CODE_LANG, lang)
-                    if idx == 0 and len(lines) > 1:
-                        fmt.setProperty(BLOCK_LEVEL, 1)
-                    r.new_block(fmt, _code_char_format())
-                    r.insert_text(line, _code_char_format())
-            i += 1
-            continue
-        if typ == "code_block":
-            # Indented code (CommonMark). Treat like fence without lang.
-            content = t.content.rstrip("\n")
-            lines = content.split("\n") if content else [""]
-            for line in lines:
+# --------------------------------------------------------------------
+# Block walk
+# --------------------------------------------------------------------
+
+
+class _BlockState:
+    """Mutable state threaded through the recursive block walker."""
+
+    def __init__(self) -> None:
+        self.list_stack: list[tuple[str, int]] = []  # (kind, start)
+        self.qlist_stack: list = []  # parallel QTextList stack
+
+
+def _walk_block(node: dict, r: _Renderer, st: _BlockState) -> None:
+    ntype = node.get("type")
+
+    if ntype == "heading":
+        level = int((node.get("attrs") or {}).get("level", 1))
+        r.new_block(_heading_format(level), _heading_char_format(level))
+        runs = _walk_inline(node.get("children", []), _InlineStyle())
+        base = _heading_char_format(level)
+        for text, style in runs:
+            r.insert_run(text, style, base_fmt=base)
+        return
+
+    if ntype == "paragraph":
+        r.new_block(_paragraph_format())
+        runs = _walk_inline(node.get("children", []), _InlineStyle())
+        for text, style in runs:
+            r.insert_run(text, style)
+        return
+
+    if ntype == "thematic_break":
+        r.new_block(_hr_format())
+        r.insert_text("—" * 20)
+        return
+
+    if ntype == "block_code":
+        info = (node.get("attrs") or {}).get("info") or ""
+        lang = info.strip().split()[0] if info.strip() else ""
+        content = node.get("raw", "")
+        if content.endswith("\n"):
+            content = content[:-1]
+        highlighted = _pygments_highlight(content, lang) if lang else None
+        if highlighted is not None:
+            for idx, line_tokens in enumerate(highlighted):
                 fmt = _code_format()
-                fmt.setProperty(BLOCK_CODE_LANG, "")
+                fmt.setProperty(BLOCK_CODE_LANG, lang)
+                if idx == 0 and len(highlighted) > 1:
+                    fmt.setProperty(BLOCK_LEVEL, 1)
+                r.new_block(fmt, _code_char_format())
+                for tok_text, tok_color in line_tokens:
+                    f = _code_char_format()
+                    if tok_color:
+                        f.setForeground(QColor(tok_color))
+                    r.insert_text(tok_text, f)
+        else:
+            lines = content.split("\n") if content else [""]
+            for idx, line in enumerate(lines):
+                fmt = _code_format()
+                fmt.setProperty(BLOCK_CODE_LANG, lang)
+                if idx == 0 and len(lines) > 1:
+                    fmt.setProperty(BLOCK_LEVEL, 1)
                 r.new_block(fmt, _code_char_format())
                 r.insert_text(line, _code_char_format())
-            i += 1
-            continue
-        if typ == "blockquote_open":
-            # Emit contained paragraphs as blockquote blocks.
-            depth = 1
-            j = i + 1
-            inner = []
-            while j < n and depth > 0:
-                if tokens[j].type == "blockquote_open":
-                    depth += 1
-                elif tokens[j].type == "blockquote_close":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                inner.append(tokens[j])
-                j += 1
-            # Render inner: just paragraphs for now
-            k = 0
-            while k < len(inner):
-                tt = inner[k]
-                if tt.type == "paragraph_open":
-                    inline_tok = inner[k + 1]
-                    r.new_block(_quote_format())
-                    runs = _parse_inline_children(inline_tok.children or [], _InlineStyle())
-                    for text, style in runs:
-                        r.insert_run(text, style)
-                    k += 3
-                    continue
-                k += 1
-            i = j + 1
-            continue
-        if typ == "hr":
-            fmt = _hr_format()
-            r.new_block(fmt)
-            r.insert_text("—" * 20)
-            i += 1
-            continue
-        if typ == "table_open":
-            # Collect the whole table
-            rows: list[list[list]] = []  # list of rows; each row = list of cells; each cell = list of inline child tokens
-            header_row: list[list] = []
-            align: list[str] = []
-            j = i + 1
-            depth = 1
-            current_is_header = False
-            row_cells: list[list] = []
-            while j < n and depth > 0:
-                tt = tokens[j]
-                if tt.type == "table_open":
-                    depth += 1
-                elif tt.type == "table_close":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                elif tt.type == "thead_open":
-                    current_is_header = True
-                elif tt.type == "thead_close":
-                    current_is_header = False
-                elif tt.type == "tr_open":
-                    row_cells = []
-                elif tt.type == "tr_close":
-                    if current_is_header:
-                        header_row = row_cells
-                    else:
-                        rows.append(row_cells)
-                elif tt.type in ("th_open", "td_open"):
-                    cell_align = tt.attrGet("style") or ""
-                    if current_is_header:
-                        if "text-align:left" in cell_align:
-                            align.append("left")
-                        elif "text-align:right" in cell_align:
-                            align.append("right")
-                        elif "text-align:center" in cell_align:
-                            align.append("center")
-                        else:
-                            align.append("")
-                    # next token is inline
-                    inline_tok = tokens[j + 1]
-                    row_cells.append(inline_tok.children or [])
-                j += 1
-            _render_table(r, header_row, rows, align)
-            i = j + 1
-            continue
-        # Unknown / close tokens
-        i += 1
+        return
 
-    _post_process_toc_markers(doc)
-    _post_process_transclusions(doc, _transclusion_targets, transclusion_resolver)
-    _post_process_footnotes(doc)
+    if ntype == "block_math":
+        # Display equation: a paragraph containing one display equation run.
+        latex = node.get("raw", "")
+        r.new_block(_paragraph_format())
+        style = _InlineStyle()
+        style.equation = latex
+        style.equation_display = True
+        r.insert_run(f"$${latex}$$", style)
+        return
+
+    if ntype == "block_quote":
+        for child in node.get("children", []) or []:
+            if child.get("type") == "paragraph":
+                r.new_block(_quote_format())
+                runs = _walk_inline(child.get("children", []), _InlineStyle())
+                for text, style in runs:
+                    r.insert_run(text, style)
+            else:
+                _walk_block(child, r, st)
+        return
+
+    if ntype == "list":
+        kind = "ol" if (node.get("attrs") or {}).get("ordered") else "ul"
+        # mistune doesn't expose the start integer; default to 1.
+        start = int((node.get("attrs") or {}).get("start") or 1)
+        st.list_stack.append((kind, start))
+        st.qlist_stack.append(None)
+        try:
+            for item in node.get("children", []) or []:
+                _walk_list_item(item, r, st)
+        finally:
+            st.list_stack.pop()
+            st.qlist_stack.pop()
+        return
+
+    if ntype == "table":
+        _render_table(r, node)
+        return
+
+    if ntype == "footnotes":
+        # Render each footnote_item as a paragraph block: `[^key]: body`.
+        for item in node.get("children", []) or []:
+            key = (item.get("attrs") or {}).get("key", "")
+            body_parts: list[str] = []
+            for child in item.get("children", []) or []:
+                if child.get("type") == "paragraph":
+                    runs = _walk_inline(child.get("children", []), _InlineStyle())
+                    body_parts.append("".join(t for t, _ in runs))
+            r.new_block(_paragraph_format())
+            r.insert_text(f"[^{key}]: " + " ".join(body_parts))
+        return
+
+    if ntype == "blank_line":
+        return
+
+    if ntype == "block_html":
+        # Pass HTML through as a paragraph of literal text.
+        raw = node.get("raw", "")
+        if raw.strip():
+            r.new_block(_paragraph_format())
+            r.insert_text(raw)
+        return
+
+    # Unknown block — best-effort: recurse into children if any.
+    for child in node.get("children", []) or []:
+        _walk_block(child, r, st)
 
 
-def _post_process_toc_markers(doc: QTextDocument) -> None:
-    """Find TOC-sentinel blocks; tag them, replace the sentinel with a styled
-    `[[!TOC]]` label, and append a clickable list of the document's headings
-    as read-only child blocks (marked `BLOCK_TRANSCLUDED_CHILD` so they're
-    dropped on save)."""
-    # First pass: collect headings so we can render them as a list.
-    headings: list[tuple[int, str]] = []
-    block = doc.firstBlock()
-    while block.isValid():
-        bf = block.blockFormat()
-        if (bf.property(BLOCK_KIND) or "") == "h":
-            level = int(bf.property(BLOCK_LEVEL) or 1)
-            headings.append((level, block.text().strip()))
-        block = block.next()
+def _walk_list_item(item: dict, r: _Renderer, st: _BlockState) -> None:
+    is_task = item.get("type") == "task_list_item"
+    task_state = 1 if is_task and (item.get("attrs") or {}).get("checked") else 0
 
-    # Second pass: find + rewrite sentinel blocks.
-    hits: list[int] = []
-    block = doc.firstBlock()
-    while block.isValid():
-        if block.text().strip() == _TOC_SENTINEL:
-            hits.append(block.position())
-        block = block.next()
-    for pos in reversed(hits):
-        cur = QTextCursor(doc)
-        cur.setPosition(pos)
-        blk = cur.block()
-        cur.setPosition(blk.position())
-        cur.setPosition(blk.position() + blk.length() - 1, QTextCursor.MoveMode.KeepAnchor)
-        cur.removeSelectedText()
-        bf = blk.blockFormat()
-        bf.setProperty(BLOCK_TOC_MARKER, True)
-        cur.setBlockFormat(bf)
-        cf = QTextCharFormat()
-        cf.setForeground(QColor("#1a5fb4"))
-        cf.setFontItalic(True)
-        cur.insertText("[[!TOC]]", cf)
-        # Append a clickable anchor list, one heading per child block.
-        for level, htext in headings:
-            if not htext:
-                continue
-            cbf = QTextBlockFormat()
-            cbf.setProperty(BLOCK_KIND, "p")
-            cbf.setProperty(BLOCK_TRANSCLUDED_CHILD, True)
-            cbf.setLeftMargin(12 * level)
-            cur.insertBlock(cbf)
-            acf = QTextCharFormat()
-            acf.setForeground(QColor("#1a5fb4"))
-            acf.setAnchor(True)
-            acf.setAnchorHref(f"qnotebook:#{htext}")
-            acf.setProperty(CHAR_WIKILINK, f"#{htext}")
-            acf.setFontUnderline(True)
-            cur.insertText(htext, acf)
-
-
-def _post_process_transclusions(doc: QTextDocument, targets: list[str], resolver) -> None:
-    """Find transclusion sentinel blocks; tag them, replace text with styled
-    `{{target}}` placeholder, and optionally append the included content
-    as read-only child paragraphs (marked so the serializer skips them)."""
-    import re as _re
-    pat = _re.compile(rf"^{_TRANSCLUDE_SENTINEL_PREFIX}(\d+)$")
-    # Collect first, then mutate (iterating while inserting is fragile).
-    hits: list[tuple[int, int]] = []  # (block_position, target_idx)
-    block = doc.firstBlock()
-    while block.isValid():
-        m = pat.match(block.text().strip())
-        if m:
-            hits.append((block.position(), int(m.group(1))))
-        block = block.next()
-    # Iterate in reverse so earlier positions stay valid.
-    for pos, tidx in reversed(hits):
-        if tidx >= len(targets):
-            continue
-        target = targets[tidx]
-        cur = QTextCursor(doc)
-        cur.setPosition(pos)
-        blk = cur.block()
-        # Select the block's text (not the surrounding block separators).
-        cur.setPosition(blk.position())
-        cur.setPosition(blk.position() + blk.length() - 1, QTextCursor.MoveMode.KeepAnchor)
-        cur.removeSelectedText()
-        bf = blk.blockFormat()
-        bf.setProperty(BLOCK_TRANSCLUSION, target)
-        cur.setBlockFormat(bf)
-        cf = QTextCharFormat()
-        cf.setForeground(QColor("#7f7f7f"))
-        cf.setFontItalic(True)
-        cur.insertText(f"{{{{{target}}}}}", cf)
-        # Optionally render the included content as a read-only child block.
-        if resolver is not None:
-            try:
-                included = resolver(target)
-            except Exception:
-                included = None
-            if included:
-                cbf = QTextBlockFormat()
-                cbf.setProperty(BLOCK_KIND, "p")
-                cbf.setProperty(BLOCK_TRANSCLUDED_CHILD, True)
-                cbf.setLeftMargin(12)
-                cur.insertBlock(cbf)
-                ccf = QTextCharFormat()
-                ccf.setForeground(QColor("#4a4a4a"))
-                cur.insertText(included.strip(), ccf)
-
-
-_FN_REF_RE = re.compile(r"\[\^([A-Za-z0-9_-]+)\]")
-_FN_DEF_RE = re.compile(r"^\[\^([A-Za-z0-9_-]+)\]:\s")
-
-
-def _post_process_footnotes(doc: QTextDocument) -> None:
-    """Mark footnote reference spans and footnote definition blocks."""
-    block = doc.firstBlock()
-    while block.isValid():
-        text = block.text()
-        # Definition: `[^label]: body`
-        m_def = _FN_DEF_RE.match(text)
-        if m_def:
-            bf = block.blockFormat()
-            bf.setProperty(BLOCK_FOOTNOTE_DEF, m_def.group(1))
-            cur = QTextCursor(block)
-            cur.setBlockFormat(bf)
-        # References: `[^label]` inside the block
-        for m in _FN_REF_RE.finditer(text):
-            # Skip if this match is the definition prefix (starts at col 0 and
-            # is followed by `:` — same as `_FN_DEF_RE`).
-            if m.start() == 0 and m_def and m.group(1) == m_def.group(1):
-                continue
-            cur = QTextCursor(doc)
-            cur.setPosition(block.position() + m.start())
-            cur.setPosition(block.position() + m.end(), QTextCursor.MoveMode.KeepAnchor)
-            cf = QTextCharFormat()
-            cf.setForeground(QColor("#1a5fb4"))
-            cf.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignSuperScript)
-            cf.setProperty(CHAR_FOOTNOTE_REF, m.group(1))
-            cur.mergeCharFormat(cf)
-        block = block.next()
-
-
-def _list_item_block_format(depth: int, is_task: bool, task_state: int) -> QTextBlockFormat:
-    fmt = QTextBlockFormat()
-    fmt.setProperty(BLOCK_KIND, "task" if is_task else "li")
-    fmt.setProperty(BLOCK_LEVEL, depth)
-    if is_task:
-        fmt.setProperty(BLOCK_TASK_STATE, task_state)
-    fmt.setTopMargin(2)
-    fmt.setBottomMargin(2)
-    return fmt
+    children = item.get("children", []) or []
+    # First inline-bearing child becomes the item's primary block; nested
+    # `list` children become nested lists; extra paragraphs become continuation
+    # blocks at the same depth.
+    first_inline_done = False
+    for child in children:
+        ctype = child.get("type")
+        if ctype in ("block_text", "paragraph"):
+            depth = len(st.list_stack)
+            if not first_inline_done:
+                fmt = _list_item_block_format(depth, is_task, task_state)
+                r.new_block(fmt)
+                current_list = st.qlist_stack[-1] if st.qlist_stack else None
+                new_list = _apply_list_format(r.cursor, st.list_stack, current_list)
+                st.qlist_stack[-1] = new_list
+                first_inline_done = True
+            else:
+                # Continuation paragraph in a loose list — render as a li-kind
+                # block (no second list bullet).
+                fmt = _list_item_block_format(depth, False, 0)
+                r.new_block(fmt)
+            runs = _walk_inline(child.get("children", []), _InlineStyle())
+            for text, style in runs:
+                r.insert_run(text, style)
+        elif ctype == "list":
+            _walk_block(child, r, st)
+        elif ctype == "block_code":
+            _walk_block(child, r, st)
+        else:
+            _walk_block(child, r, st)
 
 
 def _apply_list_format(cursor: QTextCursor, list_stack: list[tuple[str, int]], existing):
@@ -853,9 +579,297 @@ def _apply_list_format(cursor: QTextCursor, list_stack: list[tuple[str, int]], e
     return cursor.createList(lf)
 
 
+# --------------------------------------------------------------------
+# Tables
+# --------------------------------------------------------------------
+
+
+def _render_table(r: _Renderer, node: dict) -> None:
+    head_cells: list[list[dict]] = []
+    align: list[str] = []
+    body_rows: list[list[list[dict]]] = []
+    for section in node.get("children", []) or []:
+        stype = section.get("type")
+        if stype == "table_head":
+            for cell in section.get("children", []) or []:
+                head_cells.append(cell.get("children", []) or [])
+                a = (cell.get("attrs") or {}).get("align") or ""
+                align.append(a)
+        elif stype == "table_body":
+            for row in section.get("children", []) or []:
+                row_cells: list[list[dict]] = []
+                for cell in row.get("children", []) or []:
+                    row_cells.append(cell.get("children", []) or [])
+                body_rows.append(row_cells)
+
+    n_cols = max(len(head_cells), max((len(row) for row in body_rows), default=0)) if (head_cells or body_rows) else 0
+    if n_cols == 0:
+        return
+    n_rows = (1 if head_cells else 0) + len(body_rows)
+    if n_rows == 0:
+        return
+
+    tfmt = QTextTableFormat()
+    tfmt.setBorder(1)
+    tfmt.setCellPadding(4)
+    tfmt.setCellSpacing(0)
+    r.new_block(_paragraph_format())
+    table = r.cursor.insertTable(n_rows, n_cols, tfmt)
+
+    def fill_cell(row: int, col: int, children: list[dict], is_header: bool) -> None:
+        cell = table.cellAt(row, col)
+        cur = cell.firstCursorPosition()
+        bfmt = QTextBlockFormat()
+        bfmt.setProperty(BLOCK_KIND, "th" if is_header else "td")
+        cur.setBlockFormat(bfmt)
+        runs = _walk_inline(children, _InlineStyle())
+        for text, style in runs:
+            f = style.char_format()
+            if is_header:
+                f.setFontWeight(QFont.Weight.Bold)
+            cur.insertText(text, f)
+
+    row_offset = 0
+    if head_cells:
+        for c in range(n_cols):
+            fill_cell(0, c, head_cells[c] if c < len(head_cells) else [], True)
+        row_offset = 1
+    for ri, row in enumerate(body_rows):
+        for c in range(n_cols):
+            fill_cell(row_offset + ri, c, row[c] if c < len(row) else [], False)
+    r.cursor.movePosition(QTextCursor.MoveOperation.End)
+
+
+# --------------------------------------------------------------------
+# Sentinel preprocessing for project-specific block markers
+# --------------------------------------------------------------------
+
+_TOC_SENTINEL = "QNOTEBOOKTOCMARKERLINE"
+_TRANSCLUDE_SENTINEL_PREFIX = "QNOTEBOOKTRANSCLUDELINE"
+
+
+def _preprocess_transclusions(md_text: str) -> tuple[str, list[str]]:
+    out_lines: list[str] = []
+    targets: list[str] = []
+    in_fence = False
+    pat = re.compile(r"^\{\{([^{}\n]+)\}\}$")
+    for line in (md_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        m = pat.match(stripped) if not in_fence else None
+        if m:
+            idx = len(targets)
+            targets.append(m.group(1).strip())
+            out_lines.append(f"{_TRANSCLUDE_SENTINEL_PREFIX}{idx}")
+        else:
+            out_lines.append(line)
+    out = "\n".join(out_lines)
+    if md_text.endswith("\n"):
+        out += "\n"
+    return out, targets
+
+
+def _preprocess_toc_markers(md_text: str) -> str:
+    out_lines: list[str] = []
+    in_fence = False
+    for line in (md_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if not in_fence and stripped == "[[!TOC]]":
+            out_lines.append(_TOC_SENTINEL)
+        else:
+            out_lines.append(line)
+    out = "\n".join(out_lines)
+    if md_text.endswith("\n"):
+        out += "\n"
+    return out
+
+
+# --------------------------------------------------------------------
+# Public entry
+# --------------------------------------------------------------------
+
+
+def _build_parser() -> mistune.Markdown:
+    plugins = ["table", "strikethrough", "task_lists", "math",
+               _wikilink_plugin, _tag_plugin]
+    return mistune.create_markdown(renderer=None, plugins=plugins)
+
+
+def markdown_to_qdoc(
+    md_text: str,
+    doc: QTextDocument,
+    base_path: Path | None = None,
+    transclusion_resolver=None,
+) -> None:
+    """Parse markdown and populate `doc` with styled blocks."""
+    doc.clear()
+    doc.setDefaultStyleSheet("")
+    root_fmt = QTextFrameFormat()
+    root_fmt.setMargin(0)
+    doc.rootFrame().setFrameFormat(root_fmt)
+
+    # Frontmatter: strip and stash on the doc.
+    try:
+        from . import frontmatter as _fm_mod
+        _fm_data, md_text = _fm_mod.split(md_text or "")
+    except Exception:
+        _fm_data = {}
+    try:
+        doc._zimqt_frontmatter = _fm_data  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    md_text = _preprocess_toc_markers(md_text or "")
+    md_text, transclusion_targets = _preprocess_transclusions(md_text)
+
+    parser = _build_parser()
+    ast = parser(md_text or "")
+
+    r = _Renderer(doc, base_path=base_path)
+    st = _BlockState()
+    for node in ast or []:
+        _walk_block(node, r, st)
+
+    _post_process_toc_markers(doc)
+    _post_process_transclusions(doc, transclusion_targets, transclusion_resolver)
+    _post_process_footnotes(doc)
+
+
+# --------------------------------------------------------------------
+# Post-processing on the rendered QTextDocument
+# --------------------------------------------------------------------
+
+
+def _post_process_toc_markers(doc: QTextDocument) -> None:
+    headings: list[tuple[int, str]] = []
+    block = doc.firstBlock()
+    while block.isValid():
+        bf = block.blockFormat()
+        if (bf.property(BLOCK_KIND) or "") == "h":
+            level = int(bf.property(BLOCK_LEVEL) or 1)
+            headings.append((level, block.text().strip()))
+        block = block.next()
+
+    hits: list[int] = []
+    block = doc.firstBlock()
+    while block.isValid():
+        if block.text().strip() == _TOC_SENTINEL:
+            hits.append(block.position())
+        block = block.next()
+    for pos in reversed(hits):
+        cur = QTextCursor(doc)
+        cur.setPosition(pos)
+        blk = cur.block()
+        cur.setPosition(blk.position())
+        cur.setPosition(blk.position() + blk.length() - 1, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        bf = blk.blockFormat()
+        bf.setProperty(BLOCK_TOC_MARKER, True)
+        cur.setBlockFormat(bf)
+        cf = QTextCharFormat()
+        cf.setForeground(QColor("#1a5fb4"))
+        cf.setFontItalic(True)
+        cur.insertText("[[!TOC]]", cf)
+        for level, htext in headings:
+            if not htext:
+                continue
+            cbf = QTextBlockFormat()
+            cbf.setProperty(BLOCK_KIND, "p")
+            cbf.setProperty(BLOCK_TRANSCLUDED_CHILD, True)
+            cbf.setLeftMargin(12 * level)
+            cur.insertBlock(cbf)
+            acf = QTextCharFormat()
+            acf.setForeground(QColor("#1a5fb4"))
+            acf.setAnchor(True)
+            acf.setAnchorHref(f"qnotebook:#{htext}")
+            acf.setProperty(CHAR_WIKILINK, f"#{htext}")
+            acf.setFontUnderline(True)
+            cur.insertText(htext, acf)
+
+
+def _post_process_transclusions(doc: QTextDocument, targets: list[str], resolver) -> None:
+    pat = re.compile(rf"^{_TRANSCLUDE_SENTINEL_PREFIX}(\d+)$")
+    hits: list[tuple[int, int]] = []
+    block = doc.firstBlock()
+    while block.isValid():
+        m = pat.match(block.text().strip())
+        if m:
+            hits.append((block.position(), int(m.group(1))))
+        block = block.next()
+    for pos, tidx in reversed(hits):
+        if tidx >= len(targets):
+            continue
+        target = targets[tidx]
+        cur = QTextCursor(doc)
+        cur.setPosition(pos)
+        blk = cur.block()
+        cur.setPosition(blk.position())
+        cur.setPosition(blk.position() + blk.length() - 1, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        bf = blk.blockFormat()
+        bf.setProperty(BLOCK_TRANSCLUSION, target)
+        cur.setBlockFormat(bf)
+        cf = QTextCharFormat()
+        cf.setForeground(QColor("#7f7f7f"))
+        cf.setFontItalic(True)
+        cur.insertText(f"{{{{{target}}}}}", cf)
+        if resolver is not None:
+            try:
+                included = resolver(target)
+            except Exception:
+                included = None
+            if included:
+                cbf = QTextBlockFormat()
+                cbf.setProperty(BLOCK_KIND, "p")
+                cbf.setProperty(BLOCK_TRANSCLUDED_CHILD, True)
+                cbf.setLeftMargin(12)
+                cur.insertBlock(cbf)
+                ccf = QTextCharFormat()
+                ccf.setForeground(QColor("#4a4a4a"))
+                cur.insertText(included.strip(), ccf)
+
+
+_FN_REF_RE = re.compile(r"\[\^([A-Za-z0-9_-]+)\]")
+_FN_DEF_RE = re.compile(r"^\[\^([A-Za-z0-9_-]+)\]:\s")
+
+
+def _post_process_footnotes(doc: QTextDocument) -> None:
+    block = doc.firstBlock()
+    while block.isValid():
+        text = block.text()
+        m_def = _FN_DEF_RE.match(text)
+        if m_def:
+            bf = block.blockFormat()
+            bf.setProperty(BLOCK_FOOTNOTE_DEF, m_def.group(1))
+            cur = QTextCursor(block)
+            cur.setBlockFormat(bf)
+        for m in _FN_REF_RE.finditer(text):
+            if m.start() == 0 and m_def and m.group(1) == m_def.group(1):
+                continue
+            cur = QTextCursor(doc)
+            cur.setPosition(block.position() + m.start())
+            cur.setPosition(block.position() + m.end(), QTextCursor.MoveMode.KeepAnchor)
+            cf = QTextCharFormat()
+            cf.setForeground(QColor("#1a5fb4"))
+            cf.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignSuperScript)
+            cf.setProperty(CHAR_FOOTNOTE_REF, m.group(1))
+            cur.mergeCharFormat(cf)
+        block = block.next()
+
+
+# --------------------------------------------------------------------
+# Pygments highlighting (unchanged)
+# --------------------------------------------------------------------
+
+
 def _pygments_highlight(source: str, lang: str) -> list[list[tuple[str, str | None]]] | None:
-    """Return a list-per-line of (text, css_color) tokens using Pygments.
-    Returns None if Pygments is unavailable or the lexer is unknown."""
     try:
         from pygments import lex
         from pygments.lexers import get_lexer_by_name
@@ -868,7 +882,6 @@ def _pygments_highlight(source: str, lang: str) -> list[list[tuple[str, str | No
     except ClassNotFound:
         return None
 
-    # Minimal Token → color map for a light theme.
     palette = {
         Token.Keyword: "#8f3f71",
         Token.Keyword.Namespace: "#8f3f71",
@@ -896,59 +909,14 @@ def _pygments_highlight(source: str, lang: str) -> list[list[tuple[str, str | No
     lines: list[list[tuple[str, str | None]]] = [[]]
     for tok_type, tok_text in lex(source, lexer):
         color = color_for(tok_type)
-        # Split on newlines to preserve per-line structure
         parts = tok_text.split("\n")
         for k, part in enumerate(parts):
             if part:
                 lines[-1].append((part, color))
             if k < len(parts) - 1:
                 lines.append([])
-    # Drop a trailing empty line the lexer may have appended after the final newline.
     if len(lines) > 1 and not lines[-1]:
         lines.pop()
     if not lines:
         lines = [[]]
     return lines
-
-
-def _render_table(r: _Renderer, header: list, rows: list[list[list]], align: list[str]) -> None:
-    n_cols = max(len(header), max((len(row) for row in rows), default=0)) if (header or rows) else 0
-    if n_cols == 0:
-        return
-    n_rows = 1 + len(rows) if header else len(rows)
-    if n_rows == 0:
-        return
-    # Insert a paragraph to anchor the table after, to avoid orphan cursor issues
-    # Actually Qt insertTable works inline — insert at current position.
-    tfmt = QTextTableFormat()
-    tfmt.setBorder(1)
-    tfmt.setCellPadding(4)
-    tfmt.setCellSpacing(0)
-    # Ensure we're on a new block first
-    r.new_block(_paragraph_format())
-    # Mark this paragraph as pre-table marker (empty)
-    table = r.cursor.insertTable(n_rows, n_cols, tfmt)
-    # Fill cells
-    def fill_cell(row: int, col: int, children: list, is_header: bool) -> None:
-        cell = table.cellAt(row, col)
-        cur = cell.firstCursorPosition()
-        bfmt = QTextBlockFormat()
-        bfmt.setProperty(BLOCK_KIND, "th" if is_header else "td")
-        cur.setBlockFormat(bfmt)
-        runs = _parse_inline_children(children, _InlineStyle())
-        for text, style in runs:
-            f = style.char_format()
-            if is_header:
-                f.setFontWeight(QFont.Weight.Bold)
-            cur.insertText(text, f)
-
-    row_offset = 0
-    if header:
-        for c in range(n_cols):
-            fill_cell(0, c, header[c] if c < len(header) else [], True)
-        row_offset = 1
-    for ri, row in enumerate(rows):
-        for c in range(n_cols):
-            fill_cell(row_offset + ri, c, row[c] if c < len(row) else [], False)
-    # Move cursor past the table
-    r.cursor.movePosition(QTextCursor.MoveOperation.End)
