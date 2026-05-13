@@ -145,3 +145,36 @@ def test_tag_index_pages_with_tag(tmp_path: Path):
     assert tags["todo"] == 2
     assert tags["done"] == 1
     idx.close()
+
+
+def test_extract_wikilinks_strips_heading():
+    from qnotebook.index import extract_wikilinks
+    assert extract_wikilinks("[[Page#Heading]]") == ["Page"]
+    assert extract_wikilinks("[[Page#Heading|alias]]") == ["Page"]
+
+
+def test_extract_wikilinks_same_page_anchor_no_forward_link():
+    from qnotebook.index import extract_wikilinks
+    assert extract_wikilinks("[[#Heading]]") == []
+
+
+def test_split_target_heading_splits_correctly():
+    from qnotebook.index import split_target_heading
+    assert split_target_heading("Foo#Bar") == ("Foo", "Bar")
+    assert split_target_heading("Foo") == ("Foo", "")
+    assert split_target_heading("#Bar") == ("", "Bar")
+
+
+def test_rewrite_wikilinks_preserves_heading_anchor():
+    from qnotebook.index import rewrite_wikilinks
+    src = "See [[Old#Sec]] and [[Old#Other|text]].\n"
+    out = rewrite_wikilinks(src, "Old", "New")
+    assert "[[New#Sec]]" in out
+    assert "[[New#Other|text]]" in out
+
+
+def test_rewrite_wikilinks_leaves_same_page_anchor_alone():
+    from qnotebook.index import rewrite_wikilinks
+    src = "See [[#Top]] still.\n"
+    out = rewrite_wikilinks(src, "Top", "Bottom")
+    assert "[[#Top]]" in out

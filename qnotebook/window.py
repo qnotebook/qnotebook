@@ -30,6 +30,36 @@ from .editor import MarkdownEditor
 from .search import Search, Hit
 
 
+def _extract_heading_section(md_text: str, heading: str) -> str:
+    """Return the body under the first heading whose text matches `heading`,
+    stopping at the next same-or-higher-level heading."""
+    target = heading.strip().lower()
+    lines = md_text.splitlines()
+    out: list[str] = []
+    start_level: int | None = None
+    capturing = False
+    for line in lines:
+        m_h = None
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            # Count leading # up to 6
+            k = 0
+            while k < len(stripped) and stripped[k] == "#" and k < 6:
+                k += 1
+            if k > 0 and (k >= len(stripped) or stripped[k] == " "):
+                htext = stripped[k + 1:].strip() if k < len(stripped) else ""
+                m_h = (k, htext)
+        if capturing:
+            if m_h is not None and m_h[0] <= (start_level or 99):
+                break
+            out.append(line)
+            continue
+        if m_h is not None and m_h[1].lower() == target:
+            capturing = True
+            start_level = m_h[0]
+    return "\n".join(out).strip() + ("\n" if out else "")
+
+
 def _unique_path(desired: Path) -> Path:
     """Return `desired`, or `desired` with a `-1`, `-2`, ... suffix on collision."""
     if not desired.exists():
@@ -353,6 +383,21 @@ class MainWindow(QMainWindow):
         self.tree.setAcceptDrops(True)
         self.tree.setDropIndicatorShown(True)
 
+        # Alt-arrow tree navigation shortcuts (window-wide).
+        for seq, slot in [
+            ("Alt+Down", "tree_nav_down"),
+            ("Alt+Up", "tree_nav_up"),
+            ("Alt+Right", "tree_nav_expand"),
+            ("Alt+Shift+Left", "tree_nav_collapse"),  # Alt+Left taken by history back
+            ("Alt+Return", "tree_nav_open"),
+            ("Alt+Enter", "tree_nav_open"),
+        ]:
+            act = QAction(self)
+            act.setShortcut(QKeySequence(seq))
+            act.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+            act.triggered.connect(lambda _c=False, s=slot: getattr(self, s)())
+            self.addAction(act)
+
         self.editor = MarkdownEditor(self)
         self.editor.linkActivated.connect(self._on_link_activated)
         self.editor.dirtyChanged.connect(self._on_dirty_changed)
@@ -377,17 +422,33 @@ class MainWindow(QMainWindow):
 
         self.find_bar = FindBar(self.editor, self)
 
+        # External-change watcher for the current page.
+        from .watchdog import PageWatcher
+        self._page_watcher = PageWatcher(self)
+        self._page_watcher.fileChanged.connect(self._on_external_page_change)
+
+        # Primary editor pane (wrapped in a vbox with the find bar).
+        from PyQt6.QtWidgets import QVBoxLayout
+        primary_pane = QWidget(self)
+        pv = QVBoxLayout(primary_pane)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(0)
+        pv.addWidget(self.editor, 1)
+        pv.addWidget(self.find_bar)
+        primary_pane._zimqt_editor = self.editor  # type: ignore[attr-defined]
+        self._primary_pane = primary_pane
+
+        # A QSplitter that holds 1 or 2 editor panes (horizontal or vertical).
+        self._editor_split = QSplitter(Qt.Orientation.Horizontal, self)
+        self._editor_split.addWidget(primary_pane)
+        self._secondary_pane = None  # created on demand
+        self._secondary_editor = None
+
         editor_container = QWidget(self)
         ec_layout = QHBoxLayout(editor_container)
         ec_layout.setContentsMargins(0, 0, 0, 0)
         ec_layout.setSpacing(0)
-        from PyQt6.QtWidgets import QVBoxLayout
-        v = QVBoxLayout()
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
-        v.addWidget(self.editor, 1)
-        v.addWidget(self.find_bar)
-        ec_layout.addLayout(v, 1)
+        ec_layout.addWidget(self._editor_split, 1)
 
         splitter.addWidget(self.tree)
         splitter.addWidget(editor_container)
@@ -576,7 +637,7 @@ class MainWindow(QMainWindow):
         self.act_toggle_versioning.triggered.connect(self._toggle_versioning)
 
         self.act_print = QAction("&Print...", self)
-        self.act_print.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.act_print.setShortcut(QKeySequence("Ctrl+Alt+P"))
         self.act_print.triggered.connect(self._print_current_page)
 
         self.act_page_history = QAction("Page &History...", self)
@@ -589,6 +650,10 @@ class MainWindow(QMainWindow):
         self.act_quick_switch = QAction("&Quick Switch...", self)
         self.act_quick_switch.setShortcut(QKeySequence("Ctrl+P"))
         self.act_quick_switch.triggered.connect(self._open_quick_switcher)
+        self.act_command_palette = QAction("Command &Palette...", self)
+        self.act_command_palette.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.act_command_palette.triggered.connect(self._open_command_palette)
+        self.addAction(self.act_command_palette)
 
         self.act_shortcuts = QAction("Customize Shortcuts...", self)
         self.act_shortcuts.triggered.connect(self._open_shortcut_editor)
@@ -608,6 +673,10 @@ class MainWindow(QMainWindow):
         self.m_new_from_template.aboutToShow.connect(self._populate_templates_menu)
         m_file.addAction(self.act_save)
         m_file.addSeparator()
+        self.m_import = m_file.addMenu("&Import")
+        self.act_import_zim = QAction("From &Zim notebook...", self)
+        self.act_import_zim.triggered.connect(self._import_from_zim)
+        self.m_import.addAction(self.act_import_zim)
         self.m_export = m_file.addMenu("&Export")
         self.m_export.addAction(self.act_export_page_html)
         self.m_export.addAction(self.act_export_notebook_html)
@@ -686,7 +755,23 @@ class MainWindow(QMainWindow):
         if HAS_ENCHANT and bool(spell_pref):
             self.act_toggle_spell.setChecked(True)
             self._toggle_spell_check(True)
+        m_view.addSeparator()
+        m_split = m_view.addMenu("&Split")
+        self.act_split_horizontal = QAction("Split &Horizontal", self)
+        self.act_split_horizontal.triggered.connect(lambda: self.split_editor("horizontal"))
+        m_split.addAction(self.act_split_horizontal)
+        self.act_split_vertical = QAction("Split &Vertical", self)
+        self.act_split_vertical.triggered.connect(lambda: self.split_editor("vertical"))
+        m_split.addAction(self.act_split_vertical)
+        self.act_split_close = QAction("&Close Split", self)
+        self.act_split_close.triggered.connect(self.close_split)
+        m_split.addAction(self.act_split_close)
         self.m_view = m_view
+        m_tools = mb.addMenu("&Tools")
+        self.act_statistics = QAction("&Statistics...", self)
+        self.act_statistics.triggered.connect(self._show_statistics)
+        m_tools.addAction(self.act_statistics)
+        self.m_tools = m_tools
         self.m_plugins = mb.addMenu("&Plugins")
         m_fmt = mb.addMenu("F&ormat")
         m_fmt.addAction(self.act_bold)
@@ -773,7 +858,19 @@ class MainWindow(QMainWindow):
 
     def open_notebook(self, path: str) -> None:
         from .templates import ensure_builtin_templates
+        from . import locks as _locks
         root = Path(path)
+        # Attempt to take the lock. Existing + alive lock prompts the user.
+        acquired, existing = _locks.acquire(root)
+        self._read_only = False
+        if not acquired:
+            choice = self._prompt_lock_conflict(existing)
+            if choice == "cancel":
+                return
+            elif choice == "readonly":
+                self._read_only = True
+            elif choice == "force":
+                _locks.force_acquire(root)
         self.notebook = Notebook(root)
         ensure_builtin_templates(self.notebook)
         self.index = Index(self.notebook)
@@ -796,6 +893,15 @@ class MainWindow(QMainWindow):
         first = next(iter(self.notebook.pages()), None)
         if first:
             self.load_page(first.path)
+        # Restore session if enabled (default on).
+        if bool(self._settings.value("session_restore_enabled", True, type=bool)):
+            try:
+                from . import session as _session
+                data = _session.load(self.notebook.root)
+                if data:
+                    _session.restore(self, data)
+            except Exception:
+                pass
 
     def load_page(self, page_path: str) -> None:
         if self.notebook is None:
@@ -811,9 +917,12 @@ class MainWindow(QMainWindow):
         self.editor.load_markdown(
             text, page_path=page_path,
             base_path=self.notebook.file_for(page_path).parent,
+            transclusion_resolver=self._make_transclusion_resolver(page_path),
         )
         self._current_page = page_path
         self._push_recent(page_path)
+        if hasattr(self, "_page_watcher"):
+            self._page_watcher.watch(self.notebook.file_for(page_path))
         self.history.push(page_path)
         self._refresh_backlinks()
         self._refresh_linkmap()
@@ -832,6 +941,8 @@ class MainWindow(QMainWindow):
         if self.index:
             self.index.update_page(self._current_page, md)
         self.editor.clear_dirty()
+        if hasattr(self, "_page_watcher"):
+            self._page_watcher.rearm()
         self._maybe_versioning_commit(self._current_page)
         self._refresh_backlinks()
         self._refresh_tags()
@@ -942,8 +1053,326 @@ class MainWindow(QMainWindow):
             return
         if target.startswith(("http://", "https://", "mailto:")):
             return
+        # Split off optional #Heading anchor.
+        heading = ""
+        if "#" in target:
+            target, _, heading = target.partition("#")
         page = target.replace("/", ":").strip(":")
+        # [[#Heading]] = same-page anchor: stay on the current page.
+        if not page and heading and self._current_page:
+            page = self._current_page
+        # Alias resolution (frontmatter aliases)
+        if page and self.index is not None and not self.notebook.exists(page):
+            resolved = self.index.resolve_alias(page)
+            if resolved:
+                page = resolved
+        if not page:
+            return
         self.load_page(page)
+        if heading:
+            self._scroll_to_heading(heading)
+
+    # ---- reveal / terminal ----
+
+    # ---- session locks ----
+
+    def _prompt_lock_conflict(self, existing: dict | None) -> str:
+        """Default implementation shows a QMessageBox. Tests override this."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Notebook already open")
+        pid = existing.get("pid") if existing else "?"
+        host = existing.get("host") if existing else "?"
+        box.setText(
+            f"This notebook appears to be open by PID {pid} on {host}. "
+            "Open read-only, force open, or cancel?"
+        )
+        ro = box.addButton("Open read-only", QMessageBox.ButtonRole.AcceptRole)
+        force = box.addButton("Force open", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is ro:
+            return "readonly"
+        if clicked is force:
+            return "force"
+        _ = cancel
+        return "cancel"
+
+    # ---- keyboard tree navigation ----
+
+    def tree_nav_down(self) -> None:
+        self._tree_nav_vert(1)
+
+    def tree_nav_up(self) -> None:
+        self._tree_nav_vert(-1)
+
+    def tree_nav_expand(self) -> None:
+        idx = self.tree.currentIndex()
+        if idx.isValid():
+            self.tree.expand(idx)
+
+    def tree_nav_collapse(self) -> None:
+        idx = self.tree.currentIndex()
+        if idx.isValid():
+            self.tree.collapse(idx)
+
+    def tree_nav_open(self) -> None:
+        """Open currently-selected tree page in editor, pushing to history,
+        but keep focus in the editor afterwards."""
+        if self.model is None:
+            return
+        idx = self.tree.currentIndex()
+        if not idx.isValid():
+            return
+        ref = self.model.page_for_index(idx)
+        if ref is not None:
+            self.load_page(ref.path)
+            self.editor.setFocus()
+
+    def _tree_nav_vert(self, delta: int) -> None:
+        if self.model is None:
+            return
+        idx = self.tree.currentIndex()
+        if not idx.isValid():
+            # Start at root's first child.
+            new = self.model.index(0, 0)
+        else:
+            row = idx.row()
+            parent = idx.parent()
+            target_row = row + delta
+            if 0 <= target_row < self.model.rowCount(parent):
+                new = self.model.index(target_row, 0, parent)
+            else:
+                return
+        if new.isValid():
+            self.tree.setCurrentIndex(new)
+
+    def reveal_in_file_manager(self, page_path: str | None) -> None:
+        import subprocess
+        if self.notebook is None:
+            return
+        if page_path:
+            target_dir = self.notebook.file_for(page_path).parent
+        else:
+            target_dir = self.notebook.root
+        try:
+            subprocess.Popen(["xdg-open", str(target_dir)])
+        except FileNotFoundError:
+            pass
+
+    def open_terminal_here(self, page_path: str | None) -> None:
+        import os
+        import subprocess
+        if self.notebook is None:
+            return
+        cwd = (self.notebook.file_for(page_path).parent if page_path
+               else self.notebook.root)
+        term = os.environ.get("TERMINAL")
+        candidates = [term] if term else []
+        candidates += ["gnome-terminal", "konsole", "xfce4-terminal", "xterm"]
+        for cmd in candidates:
+            if not cmd:
+                continue
+            try:
+                subprocess.Popen([cmd], cwd=str(cwd))
+                return
+            except FileNotFoundError:
+                continue
+
+    # ---- statistics ----
+
+    def _show_statistics(self) -> None:
+        if self.notebook is None or self.index is None:
+            return
+        from .statistics import show_dashboard
+        show_dashboard(self, self.notebook, self.index)
+
+    # ---- import ----
+
+    def _import_from_zim(self) -> None:
+        src = QFileDialog.getExistingDirectory(self, "Select Zim notebook directory")
+        if not src:
+            return
+        dst = QFileDialog.getExistingDirectory(self, "Select target directory for markdown notebook")
+        if not dst:
+            return
+        from .importers.zim_wiki import import_notebook
+        written = import_notebook(Path(src), Path(dst))
+        QMessageBox.information(
+            self, "Import complete",
+            f"Converted {len(written)} page(s). Open the target dir as a notebook.",
+        )
+
+    # ---- external change ----
+
+    def _on_external_page_change(self, _path: str) -> None:
+        """Called when the currently-open page's file changed on disk.
+
+        If the editor is clean: reload silently. If dirty: prompt the user
+        to keep-mine, reload, or view a diff."""
+        if self.notebook is None or self._current_page is None:
+            return
+        if not self.editor.is_dirty():
+            self._reload_current_page_silently()
+            return
+        self._external_change_prompt()
+
+    def _reload_current_page_silently(self) -> None:
+        if self.notebook is None or self._current_page is None:
+            return
+        page = self._current_page
+        if not self.notebook.exists(page):
+            return
+        text = self.notebook.get_page(page)
+        self.editor.load_markdown(
+            text, page_path=page,
+            base_path=self.notebook.file_for(page).parent,
+            transclusion_resolver=self._make_transclusion_resolver(page),
+        )
+
+    def _external_change_prompt(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setWindowTitle("File changed on disk")
+        box.setText(
+            f"'{self._current_page}' changed on disk but you have unsaved edits."
+        )
+        keep = box.addButton("Keep mine", QMessageBox.ButtonRole.RejectRole)
+        reload_btn = box.addButton("Reload from disk", QMessageBox.ButtonRole.AcceptRole)
+        diff_btn = box.addButton("Show diff", QMessageBox.ButtonRole.ActionRole)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is reload_btn:
+            self._reload_current_page_silently()
+        elif clicked is diff_btn:
+            self._show_external_diff()
+        # keep: no-op
+        _ = keep  # unused
+
+    def _show_external_diff(self) -> None:
+        import difflib
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+        on_disk = self.notebook.get_page(self._current_page).splitlines(keepends=True)
+        in_mem = self.editor.markdown().splitlines(keepends=True)
+        diff = "".join(difflib.unified_diff(
+            on_disk, in_mem, fromfile="disk", tofile="buffer",
+        ))
+        dlg = QDialog(self)
+        dlg.setWindowTitle("External change diff")
+        v = QVBoxLayout(dlg)
+        te = QPlainTextEdit(diff or "(no textual difference)")
+        te.setReadOnly(True)
+        v.addWidget(te)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(dlg.reject)
+        btns.accepted.connect(dlg.accept)
+        v.addWidget(btns)
+        dlg.resize(720, 480)
+        dlg.exec()
+
+    # ---- split view ----
+
+    def split_editor(self, orientation: str = "horizontal") -> None:
+        """Open a second editor pane. `orientation` is 'horizontal' (side-by-side)
+        or 'vertical' (stacked). If already split, reorient the splitter."""
+        orient = (Qt.Orientation.Horizontal if orientation == "horizontal"
+                  else Qt.Orientation.Vertical)
+        self._editor_split.setOrientation(orient)
+        if self._secondary_pane is not None:
+            return
+        from PyQt6.QtWidgets import QVBoxLayout
+        sec_editor = MarkdownEditor(self)
+        sec_editor.linkActivated.connect(self._on_link_activated)
+        sec_editor.autoSaveRequested.connect(self._auto_save)
+        pane = QWidget(self)
+        pv = QVBoxLayout(pane)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.setSpacing(0)
+        pv.addWidget(sec_editor, 1)
+        pane._zimqt_editor = sec_editor  # type: ignore[attr-defined]
+        self._editor_split.addWidget(pane)
+        self._secondary_pane = pane
+        self._secondary_editor = sec_editor
+        # Mirror the currently-loaded page into the second pane so it starts
+        # with meaningful content.
+        if self._current_page and self.notebook is not None:
+            sec_editor.load_markdown(
+                self.notebook.get_page(self._current_page),
+                page_path=self._current_page,
+                base_path=self.notebook.file_for(self._current_page).parent,
+            )
+        # Make the secondary pane half the primary's size.
+        total = self._editor_split.size().width() if orient == Qt.Orientation.Horizontal else self._editor_split.size().height()
+        if total > 0:
+            self._editor_split.setSizes([total // 2, total // 2])
+
+    def close_split(self) -> None:
+        """Close the secondary editor pane, if any."""
+        if self._secondary_pane is None:
+            return
+        self._secondary_pane.setParent(None)
+        self._secondary_pane.deleteLater()
+        self._secondary_pane = None
+        self._secondary_editor = None
+
+    def is_split(self) -> bool:
+        return self._secondary_pane is not None
+
+    def _make_transclusion_resolver(self, origin_page: str):
+        """Return a resolver callback that returns the target page body
+        (or a specific heading section) as markdown, guarding against loops."""
+        nb = self.notebook
+        if nb is None:
+            return None
+        idx = self.index
+
+        def resolve(target: str, _seen: set[str] = set()) -> str | None:
+            page_part, heading = (target.split("#", 1) + [""])[:2] if "#" in target else (target, "")
+            page = page_part.replace("/", ":").strip(":")
+            if not page or page == origin_page or page in _seen:
+                return None
+            if not nb.exists(page):
+                if idx is not None:
+                    alt = idx.resolve_alias(page)
+                    if alt:
+                        page = alt
+                    else:
+                        return None
+                else:
+                    return None
+            if page in _seen or page == origin_page:
+                return None
+            _seen = _seen | {page}
+            body = nb.get_page(page)
+            # Strip frontmatter
+            try:
+                from . import frontmatter as _fm
+                _, body = _fm.split(body)
+            except Exception:
+                pass
+            if heading:
+                body = _extract_heading_section(body, heading)
+            return body
+
+        return resolve
+
+    def _scroll_to_heading(self, heading: str) -> None:
+        """Move the editor cursor to the first heading whose text matches."""
+        target = heading.strip().lower()
+        if not target:
+            return
+        doc = self.editor.document()
+        block = doc.firstBlock()
+        while block.isValid():
+            bfmt = block.blockFormat()
+            from .md_to_qdoc import BLOCK_KIND
+            if (bfmt.property(BLOCK_KIND) or "") == "h":
+                if block.text().strip().lower() == target:
+                    cur = QTextCursor(block)
+                    self.editor.setTextCursor(cur)
+                    self.editor.ensureCursorVisible()
+                    return
+            block = block.next()
 
     def _go_back(self) -> None:
         p = self.history.go_back()
@@ -1029,6 +1458,9 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         act_props = menu.addAction("Properties...")
         menu.addSeparator()
+        act_reveal = menu.addAction("Reveal in file manager")
+        act_terminal = menu.addAction("Open terminal here")
+        menu.addSeparator()
         act_delete = menu.addAction("Delete...")
         if ref is None:
             act_rename.setEnabled(False)
@@ -1049,6 +1481,10 @@ class MainWindow(QMainWindow):
             self._copy_page_dialog(ref.path)
         elif chosen is act_props and ref:
             self.show_page_properties(ref.path)
+        elif chosen is act_reveal:
+            self.reveal_in_file_manager(ref.path if ref else None)
+        elif chosen is act_terminal:
+            self.open_terminal_here(ref.path if ref else None)
         elif chosen is act_delete and ref:
             self._delete_page_dialog(ref.path)
 
@@ -1568,6 +2004,17 @@ class MainWindow(QMainWindow):
             if chosen:
                 self.load_page(chosen)
 
+    def _open_command_palette(self) -> None:
+        from .command_palette import CommandPalette, collect_actions
+        actions = collect_actions(self.menuBar())
+        if not actions:
+            return
+        dlg = CommandPalette(actions, self)
+        if dlg.exec() == dlg.DialogCode.Accepted:
+            a = dlg.chosen()
+            if a is not None and a.isEnabled():
+                a.trigger()
+
     # ---- find ----
 
     def _open_find(self) -> None:
@@ -2024,6 +2471,23 @@ class MainWindow(QMainWindow):
             if not self._maybe_save_dirty():
                 event.ignore()
                 return
+        # Save session snapshot.
+        if self.notebook is not None and bool(
+            self._settings.value("session_restore_enabled", True, type=bool)
+        ):
+            try:
+                from . import session as _session
+                _session.save(self.notebook.root, _session.capture(self))
+            except Exception:
+                pass
         if self.index:
             self.index.close()
+        # Release the per-notebook lock (only if we own it — read-only sessions
+        # should not remove another process's lock).
+        if self.notebook is not None and not getattr(self, "_read_only", False):
+            try:
+                from . import locks as _locks
+                _locks.remove(self.notebook.root)
+            except Exception:
+                pass
         super().closeEvent(event)

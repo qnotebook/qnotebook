@@ -365,3 +365,147 @@ def test_save_atomic_write(win, tmp_notebook):
     assert not (tmp_notebook / "Home.md.tmp").exists()
     body = (tmp_notebook / "Home.md").read_text(encoding="utf-8")
     assert "Atomic write test." in body
+
+
+def test_heading_wikilink_navigates_and_scrolls(win, tmp_notebook: Path):
+    # Put a page with multiple headings
+    (tmp_notebook / "Long.md").write_text(
+        "# Long\n\ntext\n\n## Section A\n\na\n\n## Section B\n\nb\n",
+        encoding="utf-8",
+    )
+    win.index.rebuild()
+    win._on_link_activated("Long#Section B")
+    assert win._current_page == "Long"
+    cur = win.editor.textCursor()
+    assert cur.block().text().strip() == "Section B"
+
+
+def test_same_page_anchor_stays_on_page(win, tmp_notebook: Path):
+    (tmp_notebook / "A.md").write_text(
+        "# A\n\n## Intro\n\ntxt\n\n## End\n\nz\n", encoding="utf-8"
+    )
+    win.index.rebuild()
+    win.load_page("A")
+    win._on_link_activated("#End")
+    assert win._current_page == "A"
+    cur = win.editor.textCursor()
+    assert cur.block().text().strip() == "End"
+
+
+def test_alias_wikilink_resolves(win, tmp_notebook: Path):
+    (tmp_notebook / "Real.md").write_text(
+        "---\naliases: [MyAlias]\n---\n# Real\n", encoding="utf-8"
+    )
+    win.index.rebuild()
+    win._on_link_activated("MyAlias")
+    assert win._current_page == "Real"
+
+
+def test_split_editor_horizontal_creates_secondary(win):
+    assert not win.is_split()
+    win.split_editor("horizontal")
+    assert win.is_split()
+    assert win._secondary_editor is not None
+
+
+def test_split_editor_vertical_and_close(win):
+    win.split_editor("vertical")
+    assert win.is_split()
+    win.close_split()
+    assert not win.is_split()
+
+
+def test_split_editor_mirrors_current_page(win):
+    win.load_page("Home")
+    win.split_editor("horizontal")
+    assert win._secondary_editor is not None
+    assert "Home" in win._secondary_editor.markdown() or win._secondary_editor.markdown().strip() != ""
+
+
+def test_session_save_and_restore_current_page(win, tmp_notebook, qapp, qtbot):
+    from qnotebook import session
+    win.load_page("Other")
+    data = session.capture(win)
+    assert data["current_page"] == "Other"
+    session.save(tmp_notebook, data)
+    assert (tmp_notebook / ".qnotebook" / "session.json").is_file()
+    loaded = session.load(tmp_notebook)
+    assert loaded["current_page"] == "Other"
+
+
+def test_session_restore_applies_cursor(win, tmp_notebook, qapp):
+    from qnotebook import session
+    win.load_page("Home")
+    cur = win.editor.textCursor()
+    cur.setPosition(3)
+    win.editor.setTextCursor(cur)
+    data = session.capture(win)
+    assert data["primary_cursor"] == 3
+    win.load_page("Other")
+    session.restore(win, data)
+    assert win._current_page == "Home"
+    assert win.editor.textCursor().position() == 3
+
+
+def test_session_restore_restores_split(win, tmp_notebook, qapp):
+    from qnotebook import session
+    win.load_page("Home")
+    win.split_editor("horizontal")
+    data = session.capture(win)
+    assert data["split"] is not None
+    win.close_split()
+    assert not win.is_split()
+    session.restore(win, data)
+    assert win.is_split()
+
+
+def test_reveal_in_file_manager_invokes_xdg_open(win, tmp_notebook, monkeypatch):
+    calls = []
+
+    class FakePopen:
+        def __init__(self, cmd, *a, **kw):
+            calls.append(cmd)
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+    win.reveal_in_file_manager("Home")
+    assert calls and calls[0][0] == "xdg-open"
+    assert str(tmp_notebook) in calls[0][1]
+
+
+def test_open_terminal_here_respects_env(win, tmp_notebook, monkeypatch):
+    calls = []
+
+    class FakePopen:
+        def __init__(self, cmd, *a, **kw):
+            calls.append((cmd, kw.get("cwd")))
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+    monkeypatch.setenv("TERMINAL", "my-term")
+    win.open_terminal_here(None)
+    assert calls
+    assert calls[0][0] == ["my-term"]
+    assert str(tmp_notebook) in (calls[0][1] or "")
+
+
+def test_tree_nav_down_moves_selection(win):
+    # Start at root's first child
+    idx0 = win.model.index(0, 0)
+    win.tree.setCurrentIndex(idx0)
+    assert win.tree.currentIndex().row() == 0
+    win.tree_nav_down()
+    assert win.tree.currentIndex().row() == 1
+
+
+def test_tree_nav_up_moves_selection(win):
+    idx = win.model.index(1, 0)
+    win.tree.setCurrentIndex(idx)
+    win.tree_nav_up()
+    assert win.tree.currentIndex().row() == 0
+
+
+def test_tree_nav_open_keeps_editor_focus(win):
+    idx = win.model.index(0, 0)
+    win.tree.setCurrentIndex(idx)
+    ref = win.model.page_for_index(idx)
+    win.tree_nav_open()
+    assert win._current_page == ref.path

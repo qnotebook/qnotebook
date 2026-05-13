@@ -123,10 +123,23 @@ class PageTreeModel(QAbstractItemModel):
         if node.page is None:
             return None
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
-            return node.page.name
+            return self._display_name(node.page)
         if role == Qt.ItemDataRole.ToolTipRole:
             return node.page.path
         return None
+
+    def _display_name(self, page: PageRef) -> str:
+        """Prefer frontmatter title if present; fall back to page basename."""
+        try:
+            if not self.notebook.exists(page.path):
+                return page.name
+            text = self.notebook.get_page(page.path)
+            if text.startswith("---"):
+                from .frontmatter import title_for
+                return title_for(page.path, text)
+        except Exception:
+            pass
+        return page.name
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable

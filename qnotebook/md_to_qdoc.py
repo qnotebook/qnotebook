@@ -30,6 +30,13 @@ from PyQt6.QtGui import (
 )
 from markdown_it import MarkdownIt
 
+try:
+    from mdit_py_plugins.tasklists import tasklists_plugin  # type: ignore
+    HAS_MDIT_TASKLISTS = True
+except Exception:
+    tasklists_plugin = None  # type: ignore
+    HAS_MDIT_TASKLISTS = False
+
 
 # Qt User properties on blocks — all values are strings/ints for portability.
 BLOCK_KIND = QTextCharFormat.Property.UserProperty + 1  # "p" | "h" | "code" | "bq" | "hr" | "li" | "task" | "th" | "td"
@@ -45,6 +52,10 @@ CHAR_CODE = QTextCharFormat.Property.UserProperty + 11  # bool
 CHAR_IMAGE_ALT = QTextCharFormat.Property.UserProperty + 12  # str alt text for images
 CHAR_TAG = QTextCharFormat.Property.UserProperty + 13  # str tag name (e.g. "todo" for `#todo`)
 BLOCK_TOC_MARKER = QTextCharFormat.Property.UserProperty + 14  # bool: this paragraph is a [[!TOC]] marker
+BLOCK_TRANSCLUSION = QTextCharFormat.Property.UserProperty + 22  # str: transclusion source target e.g. "Foo" or "Foo#Heading"
+BLOCK_TRANSCLUDED_CHILD = QTextCharFormat.Property.UserProperty + 23  # bool: rendered included content, skipped on serialize
+BLOCK_FOOTNOTE_DEF = QTextCharFormat.Property.UserProperty + 24  # str: footnote label for a `[^label]: ...` block
+CHAR_FOOTNOTE_REF = QTextCharFormat.Property.UserProperty + 25  # str: footnote label for a `[^label]` reference
 
 IMAGE_MAX_WIDTH = 600
 
@@ -361,6 +372,33 @@ def _emit_with_equations(out: list[tuple[str, _InlineStyle]], text: str, style: 
 
 
 _TOC_SENTINEL = "QNOTEBOOKTOCMARKERLINE"
+_TRANSCLUDE_SENTINEL_PREFIX = "QNOTEBOOKTRANSCLUDELINE"  # + N
+
+
+def _preprocess_transclusions(md_text: str) -> tuple[str, list[str]]:
+    """Replace `{{Target}}` lines with sentinel markers. Return (text, targets)."""
+    out_lines: list[str] = []
+    targets: list[str] = []
+    in_fence = False
+    import re as _re
+    pat = _re.compile(r"^\{\{([^{}\n]+)\}\}$")
+    for line in (md_text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        m = pat.match(stripped) if not in_fence else None
+        if m:
+            idx = len(targets)
+            targets.append(m.group(1).strip())
+            out_lines.append(f"{_TRANSCLUDE_SENTINEL_PREFIX}{idx}")
+        else:
+            out_lines.append(line)
+    out = "\n".join(out_lines)
+    if md_text.endswith("\n"):
+        out += "\n"
+    return out, targets
 
 
 def _preprocess_toc_markers(md_text: str) -> str:
@@ -384,7 +422,12 @@ def _preprocess_toc_markers(md_text: str) -> str:
     return out
 
 
-def markdown_to_qdoc(md_text: str, doc: QTextDocument, base_path: Path | None = None) -> None:
+def markdown_to_qdoc(
+    md_text: str,
+    doc: QTextDocument,
+    base_path: Path | None = None,
+    transclusion_resolver=None,
+) -> None:
     """Parse markdown and populate `doc` with styled blocks.
 
     `base_path` is the directory the markdown source lives in. Used to
@@ -400,7 +443,28 @@ def markdown_to_qdoc(md_text: str, doc: QTextDocument, base_path: Path | None = 
     md = MarkdownIt("commonmark", {"html": False, "breaks": False, "linkify": False}).enable(
         ["table", "strikethrough"]
     )
+    # If the official mdit-py-plugins tasklist plugin is installed, use it
+    # to mark list-item tokens as tasks. Our fallback regex detection below
+    # still runs, but the plugin ensures first-class detection even with
+    # edge-case markers.
+    if HAS_MDIT_TASKLISTS and tasklists_plugin is not None:
+        try:
+            md = md.use(tasklists_plugin, enabled=True)
+        except Exception:
+            pass
+    # Split frontmatter so it doesn't render in the editor, but preserve it
+    # on the doc so the serializer can emit it back verbatim (key-order + all).
+    try:
+        from . import frontmatter as _fm_mod
+        _fm_data, md_text = _fm_mod.split(md_text or "")
+    except Exception:
+        _fm_data = {}
+    try:
+        doc._zimqt_frontmatter = _fm_data  # type: ignore[attr-defined]
+    except Exception:
+        pass
     md_text = _preprocess_toc_markers(md_text or "")
+    md_text, _transclusion_targets = _preprocess_transclusions(md_text)
     tokens = md.parse(md_text or "")
     r = _Renderer(doc, base_path=base_path)
 
@@ -604,27 +668,144 @@ def markdown_to_qdoc(md_text: str, doc: QTextDocument, base_path: Path | None = 
         i += 1
 
     _post_process_toc_markers(doc)
+    _post_process_transclusions(doc, _transclusion_targets, transclusion_resolver)
+    _post_process_footnotes(doc)
 
 
 def _post_process_toc_markers(doc: QTextDocument) -> None:
-    """Find blocks containing the TOC sentinel; tag with BLOCK_TOC_MARKER and
-    replace the sentinel text with a styled `[[!TOC]]` placeholder."""
+    """Find TOC-sentinel blocks; tag them, replace the sentinel with a styled
+    `[[!TOC]]` label, and append a clickable list of the document's headings
+    as read-only child blocks (marked `BLOCK_TRANSCLUDED_CHILD` so they're
+    dropped on save)."""
+    # First pass: collect headings so we can render them as a list.
+    headings: list[tuple[int, str]] = []
+    block = doc.firstBlock()
+    while block.isValid():
+        bf = block.blockFormat()
+        if (bf.property(BLOCK_KIND) or "") == "h":
+            level = int(bf.property(BLOCK_LEVEL) or 1)
+            headings.append((level, block.text().strip()))
+        block = block.next()
+
+    # Second pass: find + rewrite sentinel blocks.
+    hits: list[int] = []
     block = doc.firstBlock()
     while block.isValid():
         if block.text().strip() == _TOC_SENTINEL:
-            cur = QTextCursor(block)
-            cur.select(QTextCursor.SelectionType.BlockUnderCursor)
-            cur.removeSelectedText()
-            # After removeSelectedText the block may have collapsed; re-fetch.
-            cur = QTextCursor(doc)
-            cur.setPosition(block.position())
+            hits.append(block.position())
+        block = block.next()
+    for pos in reversed(hits):
+        cur = QTextCursor(doc)
+        cur.setPosition(pos)
+        blk = cur.block()
+        cur.setPosition(blk.position())
+        cur.setPosition(blk.position() + blk.length() - 1, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        bf = blk.blockFormat()
+        bf.setProperty(BLOCK_TOC_MARKER, True)
+        cur.setBlockFormat(bf)
+        cf = QTextCharFormat()
+        cf.setForeground(QColor("#1a5fb4"))
+        cf.setFontItalic(True)
+        cur.insertText("[[!TOC]]", cf)
+        # Append a clickable anchor list, one heading per child block.
+        for level, htext in headings:
+            if not htext:
+                continue
+            cbf = QTextBlockFormat()
+            cbf.setProperty(BLOCK_KIND, "p")
+            cbf.setProperty(BLOCK_TRANSCLUDED_CHILD, True)
+            cbf.setLeftMargin(12 * level)
+            cur.insertBlock(cbf)
+            acf = QTextCharFormat()
+            acf.setForeground(QColor("#1a5fb4"))
+            acf.setAnchor(True)
+            acf.setAnchorHref(f"qnotebook:#{htext}")
+            acf.setProperty(CHAR_WIKILINK, f"#{htext}")
+            acf.setFontUnderline(True)
+            cur.insertText(htext, acf)
+
+
+def _post_process_transclusions(doc: QTextDocument, targets: list[str], resolver) -> None:
+    """Find transclusion sentinel blocks; tag them, replace text with styled
+    `{{target}}` placeholder, and optionally append the included content
+    as read-only child paragraphs (marked so the serializer skips them)."""
+    import re as _re
+    pat = _re.compile(rf"^{_TRANSCLUDE_SENTINEL_PREFIX}(\d+)$")
+    # Collect first, then mutate (iterating while inserting is fragile).
+    hits: list[tuple[int, int]] = []  # (block_position, target_idx)
+    block = doc.firstBlock()
+    while block.isValid():
+        m = pat.match(block.text().strip())
+        if m:
+            hits.append((block.position(), int(m.group(1))))
+        block = block.next()
+    # Iterate in reverse so earlier positions stay valid.
+    for pos, tidx in reversed(hits):
+        if tidx >= len(targets):
+            continue
+        target = targets[tidx]
+        cur = QTextCursor(doc)
+        cur.setPosition(pos)
+        blk = cur.block()
+        # Select the block's text (not the surrounding block separators).
+        cur.setPosition(blk.position())
+        cur.setPosition(blk.position() + blk.length() - 1, QTextCursor.MoveMode.KeepAnchor)
+        cur.removeSelectedText()
+        bf = blk.blockFormat()
+        bf.setProperty(BLOCK_TRANSCLUSION, target)
+        cur.setBlockFormat(bf)
+        cf = QTextCharFormat()
+        cf.setForeground(QColor("#7f7f7f"))
+        cf.setFontItalic(True)
+        cur.insertText(f"{{{{{target}}}}}", cf)
+        # Optionally render the included content as a read-only child block.
+        if resolver is not None:
+            try:
+                included = resolver(target)
+            except Exception:
+                included = None
+            if included:
+                cbf = QTextBlockFormat()
+                cbf.setProperty(BLOCK_KIND, "p")
+                cbf.setProperty(BLOCK_TRANSCLUDED_CHILD, True)
+                cbf.setLeftMargin(12)
+                cur.insertBlock(cbf)
+                ccf = QTextCharFormat()
+                ccf.setForeground(QColor("#4a4a4a"))
+                cur.insertText(included.strip(), ccf)
+
+
+_FN_REF_RE = re.compile(r"\[\^([A-Za-z0-9_-]+)\]")
+_FN_DEF_RE = re.compile(r"^\[\^([A-Za-z0-9_-]+)\]:\s")
+
+
+def _post_process_footnotes(doc: QTextDocument) -> None:
+    """Mark footnote reference spans and footnote definition blocks."""
+    block = doc.firstBlock()
+    while block.isValid():
+        text = block.text()
+        # Definition: `[^label]: body`
+        m_def = _FN_DEF_RE.match(text)
+        if m_def:
             bf = block.blockFormat()
-            bf.setProperty(BLOCK_TOC_MARKER, True)
+            bf.setProperty(BLOCK_FOOTNOTE_DEF, m_def.group(1))
+            cur = QTextCursor(block)
             cur.setBlockFormat(bf)
+        # References: `[^label]` inside the block
+        for m in _FN_REF_RE.finditer(text):
+            # Skip if this match is the definition prefix (starts at col 0 and
+            # is followed by `:` — same as `_FN_DEF_RE`).
+            if m.start() == 0 and m_def and m.group(1) == m_def.group(1):
+                continue
+            cur = QTextCursor(doc)
+            cur.setPosition(block.position() + m.start())
+            cur.setPosition(block.position() + m.end(), QTextCursor.MoveMode.KeepAnchor)
             cf = QTextCharFormat()
             cf.setForeground(QColor("#1a5fb4"))
-            cf.setFontItalic(True)
-            cur.insertText("[[!TOC]]", cf)
+            cf.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignSuperScript)
+            cf.setProperty(CHAR_FOOTNOTE_REF, m.group(1))
+            cur.mergeCharFormat(cf)
         block = block.next()
 
 

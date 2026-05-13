@@ -8,9 +8,18 @@ from pathlib import Path
 from typing import Iterable
 
 from .notebook import DOTDIR, Notebook, PageRef
+from . import frontmatter as _fm
 
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
+
+
+def split_target_heading(target: str) -> tuple[str, str]:
+    """Split `Page#Heading` -> (`Page`, `Heading`). `#Heading` -> (``, `Heading`)."""
+    if "#" in target:
+        page, _, heading = target.partition("#")
+        return page.strip(), heading.strip()
+    return target.strip(), ""
 
 # Tags: `#tag` at a word boundary, with letters/digits/underscore/dash.
 # We explicitly require a non-word char (or start of line) before the `#`
@@ -21,6 +30,11 @@ TAG_RE = re.compile(r"(?:(?<=^)|(?<=[\s(\[]))#([A-Za-z][\w-]*)")
 def extract_tags(md_text: str) -> list[str]:
     """Return `#tag` names in `md_text`, skipping fenced code / inline code
     / markdown link targets / wikilink internals."""
+    # Strip YAML frontmatter so `tags: [...]` lines aren't scanned as `#`-tags.
+    try:
+        _, md_text = _fm.split(md_text)
+    except Exception:
+        pass
     out: list[str] = []
     in_fence = False
     for line in md_text.splitlines():
@@ -53,6 +67,10 @@ def extract_wikilinks(md_text: str) -> list[str]:
 
     Skips links inside fenced code blocks and inline code spans.
     """
+    try:
+        _, md_text = _fm.split(md_text)
+    except Exception:
+        pass
     out: list[str] = []
     in_fence = False
     for line in md_text.splitlines():
@@ -65,7 +83,12 @@ def extract_wikilinks(md_text: str) -> list[str]:
         # Strip inline code spans
         cleaned = re.sub(r"`[^`]*`", "", line)
         for m in WIKILINK_RE.finditer(cleaned):
-            target = _normalize_target(m.group(1).strip())
+            raw = m.group(1).strip()
+            page_part, _heading = split_target_heading(raw)
+            # Same-page anchor [[#Heading]] has no forward-link target.
+            if not page_part:
+                continue
+            target = _normalize_target(page_part)
             if target:
                 out.append(target)
     return out
@@ -121,9 +144,13 @@ def _rewrite_outside_code(segment: str, old_norm: str, new: str) -> str:
     def repl(m: re.Match) -> str:
         target = m.group(1).strip()
         alias = m.group(2) or ""
-        if _normalize_target(target) != old_norm:
+        page_part, heading = split_target_heading(target)
+        if not page_part:
+            return m.group(0)  # [[#Heading]] same-page anchor — unaffected
+        if _normalize_target(page_part) != old_norm:
             return m.group(0)
-        return f"[[{new}{alias}]]"
+        suffix = f"#{heading}" if heading else ""
+        return f"[[{new}{suffix}{alias}]]"
     return REWRITE_RE.sub(repl, segment)
 
 
@@ -159,6 +186,12 @@ class Index:
             );
             CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
             CREATE INDEX IF NOT EXISTS idx_tags_page ON tags(page);
+            CREATE TABLE IF NOT EXISTS aliases (
+                alias TEXT NOT NULL,
+                page TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_aliases_alias ON aliases(alias);
+            CREATE INDEX IF NOT EXISTS idx_aliases_page ON aliases(page);
             """
         )
         self._fts = False
@@ -196,6 +229,7 @@ class Index:
         c.execute("DELETE FROM pages")
         c.execute("DELETE FROM links")
         c.execute("DELETE FROM tags")
+        c.execute("DELETE FROM aliases")
         if self._fts:
             c.execute("DELETE FROM pages_fts")
         for page in self.notebook.pages():
@@ -212,6 +246,7 @@ class Index:
             self._conn.execute("DELETE FROM pages WHERE path = ?", (page_path,))
             self._conn.execute("DELETE FROM links WHERE src = ?", (page_path,))
             self._conn.execute("DELETE FROM tags WHERE page = ?", (page_path,))
+            self._conn.execute("DELETE FROM aliases WHERE page = ?", (page_path,))
             if self._fts:
                 self._conn.execute("DELETE FROM pages_fts WHERE path = ?", (page_path,))
             return
@@ -224,13 +259,30 @@ class Index:
         )
         self._conn.execute("DELETE FROM links WHERE src = ?", (page_path,))
         self._conn.execute("DELETE FROM tags WHERE page = ?", (page_path,))
+        self._conn.execute("DELETE FROM aliases WHERE page = ?", (page_path,))
+        # Parse frontmatter; index aliases + merge frontmatter tags.
+        fm, _body = _fm.split(md_text)
+        aliases = fm.get("aliases") if isinstance(fm, dict) else None
+        if isinstance(aliases, list):
+            alias_rows = [(str(a), page_path) for a in aliases if a]
+            if alias_rows:
+                self._conn.executemany(
+                    "INSERT INTO aliases(alias, page) VALUES (?, ?)",
+                    alias_rows,
+                )
         targets = extract_wikilinks(md_text)
         if targets:
             self._conn.executemany(
                 "INSERT INTO links(src, dst) VALUES (?, ?)",
                 [(page_path, t) for t in targets],
             )
-        tags = extract_tags(md_text)
+        tags = list(extract_tags(md_text))
+        fm_tags = fm.get("tags") if isinstance(fm, dict) else None
+        if isinstance(fm_tags, list):
+            for t in fm_tags:
+                ts = str(t).lstrip("#").strip()
+                if ts and ts not in tags:
+                    tags.append(ts)
         if tags:
             self._conn.executemany(
                 "INSERT INTO tags(tag, page) VALUES (?, ?)",
@@ -247,6 +299,7 @@ class Index:
         self._conn.execute("DELETE FROM pages WHERE path = ?", (page_path,))
         self._conn.execute("DELETE FROM links WHERE src = ?", (page_path,))
         self._conn.execute("DELETE FROM tags WHERE page = ?", (page_path,))
+        self._conn.execute("DELETE FROM aliases WHERE page = ?", (page_path,))
         if self._fts:
             self._conn.execute("DELETE FROM pages_fts WHERE path = ?", (page_path,))
         self._conn.commit()
@@ -261,6 +314,7 @@ class Index:
         c.execute("UPDATE links SET src = ? WHERE src = ?", (new, old))
         c.execute("UPDATE links SET dst = ? WHERE dst = ?", (new, old))
         c.execute("UPDATE tags SET page = ? WHERE page = ?", (new, old))
+        c.execute("UPDATE aliases SET page = ? WHERE page = ?", (new, old))
         if self._fts:
             c.execute("UPDATE pages_fts SET path = ? WHERE path = ?", (new, old))
         c.commit()
@@ -358,6 +412,21 @@ class Index:
             (tag,),
         ).fetchall()
         return [r["page"] for r in rows]
+
+    def resolve_alias(self, alias: str) -> str | None:
+        """Return the page path whose frontmatter aliases include `alias`, or None."""
+        row = self._conn.execute(
+            "SELECT page FROM aliases WHERE alias = ? LIMIT 1",
+            (alias,),
+        ).fetchone()
+        return row["page"] if row else None
+
+    def aliases_for(self, page_path: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT alias FROM aliases WHERE page = ? ORDER BY alias",
+            (page_path,),
+        ).fetchall()
+        return [r["alias"] for r in rows]
 
     def all_pages(self) -> list[str]:
         rows = self._conn.execute("SELECT path FROM pages ORDER BY path").fetchall()

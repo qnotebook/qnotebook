@@ -1,0 +1,119 @@
+name: tests
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PATH: /home/runner/.cargo/bin:/home/runner/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libglib2.0-0 libdbus-1-3 \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-sync1 libxcb-xfixes0 libxcb-xkb1 libxkbcommon0 \
+            libfontconfig1 libxrender1 \
+            patch diffutils wiggle git \
+            libenchant-2-2 hunspell hunspell-en-us \
+            xdg-utils
+
+      - name: Install Python packages (required + all optional)
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "PyQt6>=6.5" \
+            "markdown-it-py>=3" \
+            pytest pytest-qt \
+            PyYAML \
+            Pygments \
+            matplotlib \
+            networkx \
+            pyenchant \
+            mdit-py-plugins
+
+      - name: Cache cargo binaries
+        id: cargo-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-mergiraf-v1
+
+      - name: Install Rust toolchain (if cache miss)
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mergiraf (if cache miss)
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        run: cargo install mergiraf --locked
+
+      - name: Report tool presence
+        run: |
+          echo "=== system tools ==="
+          which patch diff3 wiggle git mergiraf || true
+          wiggle --version | head -1 || true
+          mergiraf --version | head -1 || true
+          echo "=== python packages ==="
+          python -c "import PyQt6.QtCore; print('PyQt6', PyQt6.QtCore.QT_VERSION_STR)"
+          python -c "import markdown_it, yaml, pygments, matplotlib, networkx, enchant, mdit_py_plugins" \
+            && echo "all optional python deps importable"
+
+      - name: Compile check
+        run: python -m compileall -q qnotebook/ tests/
+
+      - name: Run test suite (single process)
+        run: pytest tests/ -v --tb=short --color=yes
+
+      - name: Run test suite (per-file isolation)
+        if: matrix.python-version == '3.13'
+        run: |
+          set -e
+          for f in tests/test_*.py; do
+            echo "--- $f ---"
+            pytest "$f" --tb=short --color=yes
+          done
+
+      - name: Upload artifact on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-py${{ matrix.python-version }}
+          path: |
+            /tmp/pytest-*
+            **/*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff
+        run: ruff check qnotebook/ tests/ || echo "ruff warnings (non-fatal)"

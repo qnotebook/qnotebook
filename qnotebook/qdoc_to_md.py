@@ -12,6 +12,8 @@ from .md_to_qdoc import (
     BLOCK_ORDERED_START,
     BLOCK_TASK_STATE,
     BLOCK_TOC_MARKER,
+    BLOCK_TRANSCLUSION,
+    BLOCK_TRANSCLUDED_CHILD,
     CHAR_CODE,
     CHAR_IMAGE_ALT,
     CHAR_WIKILINK,
@@ -41,6 +43,20 @@ def qdoc_to_markdown(doc: QTextDocument) -> str:
 
         fmt = block.blockFormat()
         kind = fmt.property(BLOCK_KIND) or "p"
+
+        # Transcluded-content children are rendered on load only; skip on save.
+        if fmt.property(BLOCK_TRANSCLUDED_CHILD):
+            i += 1
+            continue
+
+        # Transclusion placeholder: emit `{{Target}}` literally.
+        tr_target = fmt.property(BLOCK_TRANSCLUSION)
+        if tr_target:
+            _ensure_blank(out, last_kind)
+            out.append("{{" + str(tr_target) + "}}")
+            last_kind = "p"
+            i += 1
+            continue
 
         # TOC marker block
         if fmt.property(BLOCK_TOC_MARKER):
@@ -142,7 +158,16 @@ def qdoc_to_markdown(doc: QTextDocument) -> str:
     # Strip trailing blanks
     while out and out[-1] == "":
         out.pop()
-    return "\n".join(out) + ("\n" if out else "")
+    body = "\n".join(out) + ("\n" if out else "")
+    # Prepend frontmatter if one was stashed on the doc by markdown_to_qdoc.
+    fm_data = getattr(doc, "_zimqt_frontmatter", None)
+    if fm_data:
+        try:
+            from . import frontmatter as _fm_mod
+            return _fm_mod.join(fm_data, body)
+        except Exception:
+            pass
+    return body
 
 
 def _iter_blocks(doc: QTextDocument) -> list[QTextBlock]:

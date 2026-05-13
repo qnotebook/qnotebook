@@ -186,8 +186,81 @@ def test_toc_marker_block_property_set(qapp):
     assert found
 
 
+def test_frontmatter_preserved_through_roundtrip(qapp):
+    md = "---\ntitle: T\ntags: [a, b]\n---\n# Heading\n\nbody\n"
+    out = _normalize(md)
+    assert out.startswith("---\n")
+    assert "title: T" in out
+    assert "# Heading" in out
+
+
+def test_frontmatter_absent_stays_absent(qapp):
+    md = "# H\n\nbody\n"
+    out = _normalize(md)
+    assert not out.startswith("---")
+
+
 def test_equation_fallback_when_no_mathtext(qapp):
     # When matplotlib missing, equation still serializes correctly.
     md = "x is $a+b$ y\n"
     out = _normalize(md)
     assert "$a+b$" in out
+
+
+def test_transclusion_literal_roundtrip(qapp):
+    md = "Before\n\n{{Foo}}\n\nAfter\n"
+    out = _normalize(md)
+    assert "{{Foo}}" in out
+    assert "Before" in out
+    assert "After" in out
+
+
+def test_transclusion_with_heading_roundtrip(qapp):
+    md = "{{Foo#SubHeading}}\n"
+    out = _normalize(md)
+    assert "{{Foo#SubHeading}}" in out
+
+
+def test_footnote_reference_and_definition_roundtrip(qapp):
+    md = "See [^1] here.\n\n[^1]: The footnote text.\n"
+    out = _normalize(md)
+    assert "[^1]" in out
+    assert "[^1]: The footnote text." in out
+
+
+def test_footnote_definition_block_property_set(qapp):
+    from PyQt6.QtGui import QTextDocument
+    from qnotebook.md_to_qdoc import markdown_to_qdoc, BLOCK_FOOTNOTE_DEF
+    doc = QTextDocument()
+    markdown_to_qdoc("[^a]: note body.\n", doc)
+    block = doc.firstBlock()
+    while block.isValid():
+        if str(block.blockFormat().property(BLOCK_FOOTNOTE_DEF) or "") == "a":
+            return
+        block = block.next()
+    raise AssertionError("BLOCK_FOOTNOTE_DEF not set")
+
+
+def test_footnote_reference_char_property(qapp):
+    from PyQt6.QtGui import QTextDocument, QTextCursor
+    from qnotebook.md_to_qdoc import markdown_to_qdoc, CHAR_FOOTNOTE_REF
+    doc = QTextDocument()
+    markdown_to_qdoc("Ref [^x] here.\n", doc)
+    text = doc.toPlainText()
+    idx = text.index("[^x]")
+    cur = QTextCursor(doc)
+    cur.setPosition(idx + 1)  # inside the ref
+    assert str(cur.charFormat().property(CHAR_FOOTNOTE_REF) or "") == "x"
+
+
+def test_mdit_tasklists_flag_present():
+    from qnotebook.md_to_qdoc import HAS_MDIT_TASKLISTS
+    assert isinstance(HAS_MDIT_TASKLISTS, bool)
+
+
+def test_task_list_roundtrip_without_plugin(qapp):
+    # Fallback detector (regex) works regardless of plugin presence.
+    md = "- [ ] todo\n- [x] done\n"
+    out = _normalize(md)
+    assert "[ ] todo" in out
+    assert "[x] done" in out

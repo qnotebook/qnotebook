@@ -120,10 +120,14 @@ class MarkdownEditor(QTextEdit):
         md_text: str,
         page_path: str | None = None,
         base_path: Path | None = None,
+        transclusion_resolver=None,
     ) -> None:
         self._loading = True
         try:
-            markdown_to_qdoc(md_text or "", self.document(), base_path=base_path)
+            markdown_to_qdoc(
+                md_text or "", self.document(), base_path=base_path,
+                transclusion_resolver=transclusion_resolver,
+            )
             self.document().setModified(False)
             self._current_path = page_path
             self._base_path = base_path
@@ -331,6 +335,20 @@ class MarkdownEditor(QTextEdit):
     def _link_at(self, pos) -> str | None:
         cur = self.cursorForPosition(pos)
         cfmt = cur.charFormat()
+        # Footnote reference click: scroll to the matching definition block.
+        from .md_to_qdoc import CHAR_FOOTNOTE_REF, BLOCK_FOOTNOTE_DEF
+        fn_ref = cfmt.property(CHAR_FOOTNOTE_REF)
+        if fn_ref:
+            doc = self.document()
+            block = doc.firstBlock()
+            while block.isValid():
+                if str(block.blockFormat().property(BLOCK_FOOTNOTE_DEF) or "") == str(fn_ref):
+                    c = QTextCursor(block)
+                    self.setTextCursor(c)
+                    self.ensureCursorVisible()
+                    break
+                block = block.next()
+            return None
         wikilink = cfmt.property(CHAR_WIKILINK)
         if wikilink:
             return str(wikilink)

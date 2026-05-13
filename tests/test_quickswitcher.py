@@ -55,5 +55,7 @@ def test_quickswitcher_print_shortcut_rebound(qapp, tmp_notebook: Path, qtbot):
     w = MainWindow()
     w.open_notebook(str(tmp_notebook))
     qtbot.addWidget(w)
-    assert w.act_print.shortcut().toString() == "Ctrl+Shift+P"
+    # Print moved to Ctrl+Alt+P in wave4 phase 9 (Ctrl+Shift+P -> Command Palette).
+    assert w.act_print.shortcut().toString() == "Ctrl+Alt+P"
     assert w.act_quick_switch.shortcut().toString() == "Ctrl+P"
+    assert w.act_command_palette.shortcut().toString() == "Ctrl+Shift+P"

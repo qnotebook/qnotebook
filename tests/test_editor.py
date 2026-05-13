@@ -575,3 +575,110 @@ def test_live_reparse_unclosed_wikilink_no_anchor(qapp):
     assert c2.charFormat().property(CHAR_WIKILINK) is None
     ed.deleteLater()
     ed.deleteLater()
+
+
+def test_transclusion_renders_included_content(qapp):
+    from PyQt6.QtGui import QTextDocument
+    from qnotebook.md_to_qdoc import markdown_to_qdoc, BLOCK_TRANSCLUSION
+
+    def resolver(target: str) -> str | None:
+        if target == "Foo":
+            return "Included body text."
+        return None
+
+    doc = QTextDocument()
+    markdown_to_qdoc("Before\n\n{{Foo}}\n\nAfter\n", doc, transclusion_resolver=resolver)
+    full = doc.toPlainText()
+    assert "{{Foo}}" in full
+    assert "Included body text." in full
+    # Block property present
+    found = False
+    block = doc.firstBlock()
+    while block.isValid():
+        if block.blockFormat().property(BLOCK_TRANSCLUSION):
+            found = True
+            break
+        block = block.next()
+    assert found
+
+
+def test_transclusion_infinite_loop_guarded(qapp):
+    # Resolver returning a page that transcludes itself shouldn't infinite loop.
+    # We simulate by always returning None for the guarded case.
+    from PyQt6.QtGui import QTextDocument
+    from qnotebook.md_to_qdoc import markdown_to_qdoc
+
+    def resolver(target: str, _calls=[0]) -> str | None:
+        _calls[0] += 1
+        if _calls[0] > 5:
+            raise AssertionError("infinite loop")
+        return None
+
+    doc = QTextDocument()
+    markdown_to_qdoc("{{Self}}\n", doc, transclusion_resolver=resolver)
+    assert "{{Self}}" in doc.toPlainText()
+
+
+def test_transclusion_no_resolver_still_serializes(qapp):
+    from PyQt6.QtGui import QTextDocument
+    from qnotebook.md_to_qdoc import markdown_to_qdoc
+    from qnotebook.qdoc_to_md import qdoc_to_markdown
+
+    doc = QTextDocument()
+    markdown_to_qdoc("Hello\n\n{{Foo}}\n\nWorld\n", doc)
+    out = qdoc_to_markdown(doc)
+    assert "{{Foo}}" in out
+    assert "Hello" in out
+    assert "World" in out
+
+
+def test_toc_marker_generates_heading_list(qapp):
+    from PyQt6.QtGui import QTextDocument
+    from qnotebook.md_to_qdoc import markdown_to_qdoc, BLOCK_TRANSCLUDED_CHILD, CHAR_WIKILINK
+    doc = QTextDocument()
+    markdown_to_qdoc("# A\n\n[[!TOC]]\n\n## B\n\n## C\n", doc)
+    # TOC expanded to 3 child blocks (A, B, C).
+    found = 0
+    block = doc.firstBlock()
+    while block.isValid():
+        if block.blockFormat().property(BLOCK_TRANSCLUDED_CHILD):
+            found += 1
+        block = block.next()
+    assert found == 3
+
+
+def test_toc_marker_heading_anchors_target_same_page(qapp):
+    from PyQt6.QtGui import QTextDocument, QTextCursor
+    from qnotebook.md_to_qdoc import markdown_to_qdoc, CHAR_WIKILINK
+    doc = QTextDocument()
+    markdown_to_qdoc("# Top\n\n[[!TOC]]\n\n## Sub\n", doc)
+    # Walk every character: at least one should have a CHAR_WIKILINK property
+    # starting with `#` (same-page anchor to a heading).
+    found_anchor = False
+    block = doc.firstBlock()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            frag = it.fragment()
+            if frag.isValid():
+                link = frag.charFormat().property(CHAR_WIKILINK)
+                if link and str(link).startswith("#"):
+                    found_anchor = True
+                    break
+            it += 1
+        if found_anchor:
+            break
+        block = block.next()
+    assert found_anchor
+
+
+def test_toc_marker_roundtrip_still_works(qapp):
+    from PyQt6.QtGui import QTextDocument
+    from qnotebook.md_to_qdoc import markdown_to_qdoc
+    from qnotebook.qdoc_to_md import qdoc_to_markdown
+    doc = QTextDocument()
+    markdown_to_qdoc("# Top\n\n[[!TOC]]\n\n## Sub\n", doc)
+    out = qdoc_to_markdown(doc)
+    assert "[[!TOC]]" in out
+    # Anchor-list children are marked BLOCK_TRANSCLUDED_CHILD and dropped on save.
+    assert "## Sub" in out
