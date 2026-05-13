@@ -72,6 +72,36 @@ def test_nb_settings_roundtrip(tmp_path: Path):
     assert not nb_settings.is_new_notebook(tmp_path)
 
 
+def test_new_notebook_auto_enables_versioning(qapp, tmp_path: Path, qtbot):
+    from qnotebook import nb_settings
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.open_notebook(str(tmp_path))
+    assert nb_settings.get(tmp_path, "versioning_enabled") is True
+    assert versioning.is_repo(tmp_path)
+
+
+def test_save_commit_message_tagged_with_rung(qapp, tmp_notebook: Path, qtbot):
+    w = MainWindow()
+    qtbot.addWidget(w)
+    w.open_notebook(str(tmp_notebook))
+    w.act_toggle_versioning.setChecked(True)
+    w._toggle_versioning(True)
+    w.load_page("Home")
+    from PyQt6.QtGui import QTextCursor
+    cur = w.editor.textCursor()
+    cur.movePosition(QTextCursor.MoveOperation.End)
+    cur.insertText("\nnew line\n")
+    qapp.processEvents()
+    w._save_current()
+    res = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=str(tmp_notebook), capture_output=True, text=True,
+    )
+    # Any of the rungs we might take — at minimum the message has a bracket tag
+    assert "[" in res.stdout and "]" in res.stdout
+
+
 def test_window_save_commits_when_versioning_on(qapp, tmp_notebook: Path, qtbot):
     w = MainWindow()
     w.open_notebook(str(tmp_notebook))

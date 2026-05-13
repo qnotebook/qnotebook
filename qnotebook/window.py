@@ -427,6 +427,9 @@ class MainWindow(QMainWindow):
         self._page_watcher = PageWatcher(self)
         self._page_watcher.fileChanged.connect(self._on_external_page_change)
 
+        from . import safe_save as _safe_save
+        self._page_load_result: dict[str, _safe_save.LoadResult] = {}
+
         # Primary editor pane (wrapped in a vbox with the find bar).
         from PyQt6.QtWidgets import QVBoxLayout
         primary_pane = QWidget(self)
@@ -535,6 +538,16 @@ class MainWindow(QMainWindow):
         self.setStatusBar(QStatusBar(self))
         self._status_label = QLabel("")
         self.statusBar().addPermanentWidget(self._status_label)
+
+        from PyQt6.QtWidgets import QPushButton
+        from .sync_conflict import ConflictWatcher
+        self._conflict_badge = QPushButton("")
+        self._conflict_badge.setFlat(True)
+        self._conflict_badge.hide()
+        self._conflict_badge.clicked.connect(self._open_conflict_resolver)
+        self.statusBar().addPermanentWidget(self._conflict_badge)
+        self._conflict_watcher = ConflictWatcher(self)
+        self._conflict_watcher.conflictFileFound.connect(self._on_conflict_found)
 
     def _build_actions(self) -> None:
         self.act_open = QAction("&Open Notebook...", self)
@@ -888,6 +901,17 @@ class MainWindow(QMainWindow):
         self.tree.setModel(self.model)
         self._settings.setValue("last_notebook", str(self.notebook.root))
         self._push_recent_notebook(str(self.notebook.root))
+        self._apply_versioning_policy(root)
+        if hasattr(self, "_conflict_watcher"):
+            self._conflict_watcher.set_root(root)
+            self._refresh_conflict_badge()
+        try:
+            from .single_instance import CommandServer
+            if not hasattr(self, "_cmd_server"):
+                self._cmd_server = CommandServer(self)
+            self._cmd_server.start(root)
+        except Exception:
+            pass
         self.act_toggle_versioning.setChecked(
             bool(self._settings.value("versioning_enabled", False, type=bool))
         )
@@ -917,6 +941,7 @@ class MainWindow(QMainWindow):
                 self.model.refresh()
                 self.tree.setModel(self.model)
         text = self.notebook.get_page(page_path)
+        self._page_load_result[page_path] = self.notebook.load_for_save(page_path)
         self.editor.load_markdown(
             text, page_path=page_path,
             base_path=self.notebook.file_for(page_path).parent,
@@ -940,25 +965,80 @@ class MainWindow(QMainWindow):
         if self.notebook is None or self._current_page is None:
             return
         md = self.editor.markdown()
-        self.notebook.save_page(self._current_page, md)
+        lr = self._page_load_result.get(self._current_page)
+        result = self.notebook.save_page(self._current_page, md, load_result=lr)
+        if result.conflict:
+            from .merge_dialog import MergeDialog
+            dlg = MergeDialog(result.base, result.ours, result.theirs,
+                              page_name=self._current_page, parent=self)
+            if dlg.exec() and dlg.outcome == MergeDialog.RESULT_MERGED:
+                from . import safe_save as _ss
+                _ss.atomic_write(self.notebook.file_for(self._current_page),
+                                 dlg.result_bytes)
+                md = dlg.result_bytes.decode("utf-8", errors="replace")
+                rung = "user-merged"
+            elif dlg.outcome == MergeDialog.RESULT_CONFLICT_FILE:
+                conflict_path = self.notebook.file_for(self._current_page).with_suffix(
+                    ".md.conflict")
+                from . import safe_save as _ss
+                _ss.atomic_write(conflict_path, dlg.result_bytes)
+                return
+            else:
+                return
+        else:
+            rung = result.rung
         if self.index:
             self.index.update_page(self._current_page, md)
         self.editor.clear_dirty()
         if hasattr(self, "_page_watcher"):
             self._page_watcher.rearm()
-        self._maybe_versioning_commit(self._current_page)
+        self._maybe_versioning_commit(self._current_page, rung=rung)
+        # Refresh baseline for future saves
+        self._page_load_result[self._current_page] = self.notebook.load_for_save(
+            self._current_page)
         self._refresh_backlinks()
         self._refresh_tags()
         self._refresh_toc()
         self._update_status()
 
-    def _maybe_versioning_commit(self, page: str) -> None:
+    def _maybe_versioning_commit(self, page: str, rung: str | None = None) -> None:
         if self.notebook is None:
             return
         if not bool(self._settings.value("versioning_enabled", False, type=bool)):
             return
         from . import versioning
-        versioning.commit_page(self.notebook.root, page)
+        versioning.commit_page(self.notebook.root, page, rung=rung)
+
+    def _apply_versioning_policy(self, root: Path) -> None:
+        """New notebooks get versioning on silently. Existing notebooks that
+        haven't been prompted yet see a one-time recommendation dialog."""
+        from . import nb_settings
+        if nb_settings.is_new_notebook(root):
+            nb_settings.set_value(root, "versioning_enabled", True)
+            nb_settings.set_value(root, "versioning_prompted", True)
+            self._settings.setValue("versioning_enabled", True)
+            from . import versioning as _v
+            _v.init_repo(root)
+            return
+        if not nb_settings.get(root, "versioning_prompted", False):
+            reply = QMessageBox.question(
+                self, "Enable version history?",
+                "Enable version history for this notebook?\n"
+                "Every save will be committed to a local git repo in the "
+                "notebook root, so you can review and restore past changes.\n\n"
+                "(Recommended.)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            enabled = (reply == QMessageBox.StandardButton.Yes)
+            nb_settings.set_value(root, "versioning_enabled", enabled)
+            nb_settings.set_value(root, "versioning_prompted", True)
+            self._settings.setValue("versioning_enabled", enabled)
+            if enabled:
+                from . import versioning as _v
+                _v.init_repo(root)
+        else:
+            enabled = bool(nb_settings.get(root, "versioning_enabled", False))
+            self._settings.setValue("versioning_enabled", enabled)
 
     def _toggle_versioning(self, checked: bool) -> None:
         self._settings.setValue("versioning_enabled", bool(checked))
@@ -1853,6 +1933,27 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec()
+
+    def _on_conflict_found(self, _cf) -> None:
+        self._refresh_conflict_badge()
+
+    def _refresh_conflict_badge(self) -> None:
+        if not hasattr(self, "_conflict_watcher"):
+            return
+        n = len(self._conflict_watcher.current())
+        if n == 0:
+            self._conflict_badge.hide()
+        else:
+            self._conflict_badge.setText(f"\u26a0 {n} conflict" + ("s" if n > 1 else ""))
+            self._conflict_badge.show()
+
+    def _open_conflict_resolver(self) -> None:
+        if self.notebook is None:
+            return
+        from .plugins.builtin.syncthing_resolver import ResolverDialog
+        dlg = ResolverDialog(self.notebook.root, parent=self)
+        dlg.exec()
+        self._refresh_conflict_badge()
 
     def _open_snapshots(self) -> None:
         if self.notebook is None or self._current_page is None:

@@ -174,8 +174,17 @@ def cmd_append(notebook: str, page: str, text: str, *,
     existing = nb.get_page(page) if nb.exists(page) else ""
     new_body = _append_to_body(existing, line, heading=heading)
     nb.save_page(page, new_body)
+    _forward_reload(nb.root, page)
     print(str(nb.file_for(page)))
     return 0
+
+
+def _forward_reload(root: Path, page: str) -> None:
+    try:
+        from . import single_instance
+        single_instance.try_forward(root, {"cmd": "reload", "page": page})
+    except Exception:
+        pass
 
 
 def _append_to_body(body: str, line: str, *, heading: Optional[str] = None) -> str:

@@ -442,11 +442,26 @@ class SafeWriter:
         *,
         root: Optional[Path] = None,
         write: bool = True,
+        strict_preserve: bool = True,
     ) -> SaveResult:
         path = Path(path)
         if isinstance(E, str):
             E = E.encode("utf-8")
         O = load.original
+
+        # ---- preserve-phase: restore plugin-metadata-bearing lines the user
+        # didn't touch. When the serializer canonicalized unknown constructs
+        # at load time (load.baseline != load.original), merging
+        # base=baseline, ours=E, theirs=original line-by-line resurrects the
+        # original bytes for every region the editor didn't modify.
+        if strict_preserve and load.baseline and load.baseline != load.original:
+            restored = _apply_three_way_disjoint(load.baseline, E, load.original)
+            if restored is not None:
+                E = restored
+            elif HAS_GIT_MERGE_FILE:
+                clean, out = _git_merge_file(load.baseline, E, load.original)
+                if clean and _roundtrip_parses(out):
+                    E = out
 
         # ---- rung (a): trivial — disk unchanged since load
         disk = path.read_bytes() if path.is_file() else b""

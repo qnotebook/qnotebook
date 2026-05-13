@@ -146,11 +146,13 @@ class Notebook:
             return ""
         return f.read_text(encoding="utf-8")
 
-    def save_page(self, page: str, md_text: str) -> None:
-        """Atomic save via SafeWriter.atomic_write (same-dir tempfile + fsync).
-
-        Takes a pre-save snapshot of the current on-disk bytes so recent
-        states are recoverable from File → Snapshots."""
+    def save_page(self, page: str, md_text: str,
+                  load_result: "safe_save.LoadResult | None" = None,
+                  ) -> "safe_save.SaveResult":
+        """Atomic save via SafeWriter (same-dir tempfile + fsync + merge ladder
+        when ``load_result`` is supplied). Takes a pre-save snapshot of the
+        current on-disk bytes so recent states are recoverable from
+        File → Snapshots."""
         f = self.file_for(page)
         if f.is_file():
             try:
@@ -158,7 +160,18 @@ class Notebook:
             except Exception:
                 pass
         text = md_text.rstrip("\n") + "\n" if md_text else ""
-        safe_save.atomic_write(f, text.encode("utf-8"))
+        data = text.encode("utf-8")
+        if load_result is None:
+            safe_save.atomic_write(f, data)
+            return safe_save.SaveResult(status="ok", bytes=data, rung="atomic")
+        from . import nb_settings
+        strict = bool(nb_settings.get(self.root, "strict_preserve", True))
+        return safe_save.SafeWriter.save(
+            f, data, load_result, root=self.root, strict_preserve=strict,
+        )
+
+    def load_for_save(self, page: str) -> "safe_save.LoadResult":
+        return safe_save.SafeWriter.load(self.file_for(page))
 
     def snapshots(self, page: str) -> list["_snapshots.Snapshot"]:
         return _snapshots.list_snapshots(self.root, self.file_for(page))
