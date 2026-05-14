@@ -670,8 +670,12 @@ class MainWindow(QMainWindow):
         self.act_command_palette.triggered.connect(self._open_command_palette)
         self.addAction(self.act_command_palette)
 
+        self.act_settings = QAction("Settings...", self)
+        self.act_settings.setShortcut(QKeySequence("Ctrl+,"))
+        self.act_settings.triggered.connect(self._open_settings)
+
         self.act_shortcuts = QAction("Customize Shortcuts...", self)
-        self.act_shortcuts.triggered.connect(self._open_shortcut_editor)
+        self.act_shortcuts.triggered.connect(self._open_settings_shortcuts)
 
         self.act_quit = QAction("&Quit", self)
         self.act_quit.setShortcut(QKeySequence.StandardKey.Quit)
@@ -706,6 +710,7 @@ class MainWindow(QMainWindow):
         m_file.addAction(self.act_toggle_versioning)
         m_file.addAction(self.act_snapshots)
         m_file.addSeparator()
+        m_file.addAction(self.act_settings)
         m_file.addAction(self.act_shortcuts)
         m_file.addSeparator()
         m_file.addAction(self.act_quit)
@@ -2049,34 +2054,18 @@ class MainWindow(QMainWindow):
                 self._settings.setValue("shortcuts", raw)
                 return
 
-    def _open_shortcut_editor(self) -> None:
-        from PyQt6.QtWidgets import (
-            QDialog, QDialogButtonBox, QTableWidget, QTableWidgetItem,
-            QVBoxLayout, QHeaderView,
-        )
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Customize Shortcuts")
-        dlg.resize(540, 480)
-        v = QVBoxLayout(dlg)
-        actions = self._all_named_actions()
-        tbl = QTableWidget(len(actions), 2, dlg)
-        tbl.setHorizontalHeaderLabels(["Action", "Shortcut"])
-        tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        for r, (label, act) in enumerate(actions):
-            tbl.setItem(r, 0, QTableWidgetItem(label))
-            tbl.setItem(r, 1, QTableWidgetItem(act.shortcut().toString()))
-        v.addWidget(tbl)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=dlg,
-        )
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        v.addWidget(btns)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            for r, (label, _) in enumerate(actions):
-                key = tbl.item(r, 1).text() if tbl.item(r, 1) else ""
-                self.set_action_shortcut(label, key)
+    def _open_settings(self, initial_category: str | None = None) -> None:
+        from .settings_dialog import SettingsDialog
+        dlg = SettingsDialog(self)
+        if initial_category:
+            for i in range(dlg._category_list.count()):
+                if dlg._category_list.item(i).text() == initial_category:
+                    dlg._category_list.setCurrentRow(i)
+                    break
+        dlg.exec()
+
+    def _open_settings_shortcuts(self) -> None:
+        self._open_settings(initial_category="Shortcuts")
 
     # ---- quick note ----
 
