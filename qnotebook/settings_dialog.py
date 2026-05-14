@@ -110,7 +110,15 @@ class SettingsDialog(QDialog):
         self._add_category("Shortcuts", self._build_shortcuts_page())
 
         self._category_list.currentRowChanged.connect(self._on_category_changed)
-        self._category_list.setCurrentRow(0)
+        # Restore last-selected category if it still exists.
+        last = str(self._settings.value("settings_last_category", "", type=str) or "")
+        initial = 0
+        if last:
+            for i in range(self._category_list.count()):
+                if self._category_list.item(i).text() == last:
+                    initial = i
+                    break
+        self._category_list.setCurrentRow(initial)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -137,6 +145,8 @@ class SettingsDialog(QDialog):
         item = self._category_list.item(index)
         if item is not None:
             self._title.setText(item.text())
+            # Persist immediately — purely UI navigation, doesn't need Apply.
+            self._settings.setValue("settings_last_category", item.text())
 
     def _filter_categories(self, text: str) -> None:
         needle = text.strip().lower()

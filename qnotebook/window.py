@@ -674,9 +674,6 @@ class MainWindow(QMainWindow):
         self.act_settings.setShortcut(QKeySequence("Ctrl+,"))
         self.act_settings.triggered.connect(self._open_settings)
 
-        self.act_shortcuts = QAction("Customize Shortcuts...", self)
-        self.act_shortcuts.triggered.connect(self._open_settings_shortcuts)
-
         self.act_quit = QAction("&Quit", self)
         self.act_quit.setShortcut(QKeySequence.StandardKey.Quit)
         self.act_quit.triggered.connect(self.close)
@@ -709,8 +706,6 @@ class MainWindow(QMainWindow):
         m_file.addSeparator()
         m_file.addAction(self.act_toggle_versioning)
         m_file.addAction(self.act_snapshots)
-        m_file.addSeparator()
-        m_file.addAction(self.act_shortcuts)
         m_file.addSeparator()
         m_file.addAction(self.act_quit)
         m_edit = mb.addMenu("&Edit")
@@ -2054,18 +2049,9 @@ class MainWindow(QMainWindow):
                 self._settings.setValue("shortcuts", raw)
                 return
 
-    def _open_settings(self, initial_category: str | None = None) -> None:
+    def _open_settings(self) -> None:
         from .settings_dialog import SettingsDialog
-        dlg = SettingsDialog(self)
-        if initial_category:
-            for i in range(dlg._category_list.count()):
-                if dlg._category_list.item(i).text() == initial_category:
-                    dlg._category_list.setCurrentRow(i)
-                    break
-        dlg.exec()
-
-    def _open_settings_shortcuts(self) -> None:
-        self._open_settings(initial_category="Shortcuts")
+        SettingsDialog(self).exec()
 
     # ---- quick note ----
 
