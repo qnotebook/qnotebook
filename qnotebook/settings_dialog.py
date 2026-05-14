@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QSettings, QModelIndex
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PyQt6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
     QFrame, QGroupBox, QHBoxLayout, QHeaderView, QKeySequenceEdit, QLineEdit,
@@ -220,7 +220,7 @@ class SettingsDialog(QDialog):
 
         info = _muted_label(
             "Double-click a shortcut to record a new key combination. "
-            "Right-click a row to clear it."
+            "Right-click a row to clear it. Duplicates are highlighted in red."
         )
         layout.addWidget(info)
 
@@ -231,6 +231,8 @@ class SettingsDialog(QDialog):
         self._shortcut_defaults: dict[str, str] = {
             label: act.shortcut().toString() for label, act in actions
         }
+        # label -> bool, mirrors _refresh_shortcut_conflicts().
+        self._shortcut_conflicts: dict[str, bool] = {}
 
         self._shortcut_table = QTableWidget(len(actions), 2, page)
         self._shortcut_table.setHorizontalHeaderLabels(["Action", "Shortcut"])
@@ -254,7 +256,59 @@ class SettingsDialog(QDialog):
             self._shortcut_table.setItem(r, 1, QTableWidgetItem(act.shortcut().toString()))
         layout.addWidget(self._shortcut_table, 1)
 
+        # Re-paint conflicts on every edit. itemChanged fires for the
+        # programmatic setText() above too, which is fine — we just paint
+        # the initial state.
+        self._shortcut_table.itemChanged.connect(self._on_shortcut_item_changed)
+        self._refresh_shortcut_conflicts()
+
         return page  # table fills the page; no scroll wrap needed
+
+    def _on_shortcut_item_changed(self, item) -> None:
+        if item.column() == 1:
+            self._refresh_shortcut_conflicts()
+
+    def _refresh_shortcut_conflicts(self) -> None:
+        """Flag rows whose normalised shortcut collides with another row."""
+        rows = self._shortcut_table.rowCount()
+        by_seq: dict[str, list[int]] = {}
+        for r in range(rows):
+            cell = self._shortcut_table.item(r, 1)
+            raw = cell.text().strip() if cell is not None else ""
+            if not raw:
+                continue
+            normalised = QKeySequence(raw).toString()
+            by_seq.setdefault(normalised, []).append(r)
+
+        conflict_brush = QBrush(QColor("#cf6679"))
+        for r in range(rows):
+            label_item = self._shortcut_table.item(r, 0)
+            shortcut_item = self._shortcut_table.item(r, 1)
+            label = label_item.text() if label_item is not None else ""
+            raw = shortcut_item.text().strip() if shortcut_item is not None else ""
+            normalised = QKeySequence(raw).toString() if raw else ""
+            peers = by_seq.get(normalised, [])
+            is_conflict = len(peers) > 1
+            self._shortcut_conflicts[label] = is_conflict
+            for col in (0, 1):
+                cell = self._shortcut_table.item(r, col)
+                if cell is None:
+                    continue
+                if is_conflict:
+                    cell.setForeground(conflict_brush)
+                else:
+                    cell.setData(Qt.ItemDataRole.ForegroundRole, None)
+            if shortcut_item is not None:
+                if is_conflict:
+                    others = [
+                        self._shortcut_table.item(p, 0).text()
+                        for p in peers if p != r
+                    ]
+                    shortcut_item.setToolTip(
+                        "Conflicts with: " + ", ".join(others)
+                    )
+                else:
+                    shortcut_item.setToolTip("")
 
     def _on_shortcut_context_menu(self, pos) -> None:
         index = self._shortcut_table.indexAt(pos)

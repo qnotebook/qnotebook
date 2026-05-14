@@ -130,6 +130,52 @@ def test_context_menu_clear_and_reset(win, qtbot):
     assert dlg._shortcut_table.item(0, 1).text() == original
 
 
+class _RowFinder:
+    @staticmethod
+    def row_for(dlg, label):
+        for r in range(dlg._shortcut_table.rowCount()):
+            item = dlg._shortcut_table.item(r, 0)
+            if item is not None and item.text() == label:
+                return r
+        return -1
+
+
+def test_distinct_shortcuts_have_no_conflict(win, qtbot):
+    dlg = SettingsDialog(win)
+    qtbot.addWidget(dlg)
+    # The initial table is whatever the app shipped with; just assert no
+    # spurious conflicts on a fresh dialog.
+    assert all(v is False for v in dlg._shortcut_conflicts.values())
+
+
+def test_duplicate_shortcut_flags_both_rows(win, qtbot):
+    dlg = SettingsDialog(win)
+    qtbot.addWidget(dlg)
+    rows = dlg._shortcut_table.rowCount()
+    assert rows >= 2
+    # Force the first two rows to share a binding.
+    dlg._shortcut_table.item(0, 1).setText("Ctrl+Alt+F11")
+    dlg._shortcut_table.item(1, 1).setText("Ctrl+Alt+F11")
+    dlg._refresh_shortcut_conflicts()
+    label_a = dlg._shortcut_table.item(0, 0).text()
+    label_b = dlg._shortcut_table.item(1, 0).text()
+    assert dlg._shortcut_conflicts[label_a] is True
+    assert dlg._shortcut_conflicts[label_b] is True
+
+
+def test_resolving_conflict_clears_flag(win, qtbot):
+    dlg = SettingsDialog(win)
+    qtbot.addWidget(dlg)
+    dlg._shortcut_table.item(0, 1).setText("Ctrl+Alt+F11")
+    dlg._shortcut_table.item(1, 1).setText("Ctrl+Alt+F11")
+    dlg._refresh_shortcut_conflicts()
+    # Resolve by clearing row 1.
+    dlg._shortcut_table.item(1, 1).setText("")
+    dlg._refresh_shortcut_conflicts()
+    label_a = dlg._shortcut_table.item(0, 0).text()
+    assert dlg._shortcut_conflicts[label_a] is False
+
+
 def test_opening_settings_action_works(win, qtbot, monkeypatch):
     # Make sure invoking the menu action opens our dialog (and doesn't crash).
     captured = {}
