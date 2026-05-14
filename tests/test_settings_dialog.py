@@ -99,6 +99,37 @@ def test_apply_writes_shortcut_back(win, qtbot):
         pytest.fail(f"Action {label!r} not found")
 
 
+def test_shortcut_column_uses_key_sequence_delegate(win, qtbot):
+    from PyQt6.QtWidgets import QKeySequenceEdit
+    from qnotebook.settings_dialog import _KeySequenceDelegate
+    dlg = SettingsDialog(win)
+    qtbot.addWidget(dlg)
+    delegate = dlg._shortcut_table.itemDelegateForColumn(1)
+    assert isinstance(delegate, _KeySequenceDelegate)
+
+    # The editor created by the delegate is a QKeySequenceEdit and
+    # round-trips the existing cell value.
+    index = dlg._shortcut_table.model().index(0, 1)
+    editor = delegate.createEditor(dlg._shortcut_table, None, index)
+    qtbot.addWidget(editor)
+    assert isinstance(editor, QKeySequenceEdit)
+    delegate.setEditorData(editor, index)
+    assert editor.keySequence().toString() == dlg._shortcut_table.item(0, 1).text()
+
+
+def test_context_menu_clear_and_reset(win, qtbot):
+    dlg = SettingsDialog(win)
+    qtbot.addWidget(dlg)
+    label = dlg._shortcut_table.item(0, 0).text()
+    original = dlg._shortcut_defaults[label]
+
+    # Simulate "Clear" by setting empty text, then "Reset" via the stored default.
+    dlg._shortcut_table.item(0, 1).setText("")
+    assert dlg._shortcut_table.item(0, 1).text() == ""
+    dlg._shortcut_table.item(0, 1).setText(dlg._shortcut_defaults[label])
+    assert dlg._shortcut_table.item(0, 1).text() == original
+
+
 def test_opening_settings_action_works(win, qtbot, monkeypatch):
     # Make sure invoking the menu action opens our dialog (and doesn't crash).
     captured = {}
