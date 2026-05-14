@@ -69,13 +69,27 @@ class SettingsDialog(QDialog):
         sep.setFrameShadow(QFrame.Shadow.Sunken)
         body.addWidget(sep)
 
-        self._stack = QStackedWidget(self)
-        body.addWidget(self._stack, 1)
+        right = QWidget(self)
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(12, 0, 0, 0)
+        right_layout.setSpacing(8)
+
+        from PyQt6.QtWidgets import QLabel
+        self._title = QLabel(right)
+        title_font = self._title.font()
+        title_font.setPointSize(max(title_font.pointSize() + 4, 14))
+        title_font.setBold(True)
+        self._title.setFont(title_font)
+        right_layout.addWidget(self._title)
+
+        self._stack = QStackedWidget(right)
+        right_layout.addWidget(self._stack, 1)
+        body.addWidget(right, 1)
 
         self._add_category("General", self._build_general_page())
         self._add_category("Shortcuts", self._build_shortcuts_page())
 
-        self._category_list.currentRowChanged.connect(self._stack.setCurrentIndex)
+        self._category_list.currentRowChanged.connect(self._on_category_changed)
         self._category_list.setCurrentRow(0)
 
         buttons = QDialogButtonBox(
@@ -95,6 +109,14 @@ class SettingsDialog(QDialog):
     def _add_category(self, label: str, page: QWidget) -> None:
         self._category_list.addItem(QListWidgetItem(label))
         self._stack.addWidget(page)
+
+    def _on_category_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        self._stack.setCurrentIndex(index)
+        item = self._category_list.item(index)
+        if item is not None:
+            self._title.setText(item.text())
 
     def _filter_categories(self, text: str) -> None:
         needle = text.strip().lower()
