@@ -25,6 +25,15 @@ def main(argv: list[str] | None = None) -> int:
             win.load_page(page)
         except Exception:
             pass
+    # qdistro App1 registration — caught so a missing SDK / bus never
+    # blocks notebook startup. The receiver lives on the window to
+    # keep the bus-name claim alive for the process lifetime.
+    try:
+        from qnotebook import qdistro_integration as _qdi
+        win._qdistro_receiver = _qdi.maybe_install(win)
+    except Exception as _qd_e:  # noqa: BLE001
+        print(f"[qnotebook] qdistro App1 registration failed: {_qd_e}",
+              file=sys.stderr, flush=True)
     win.show()
     return app.exec()
 

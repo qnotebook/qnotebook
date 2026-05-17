@@ -716,6 +716,11 @@ class MainWindow(QMainWindow):
         m_edit.addAction(self.act_quick_switch)
         m_edit.addAction(self.act_quick_note)
         m_edit.addSeparator()
+        # qdistro Send-To — populated lazily so the menu reflects the
+        # live broker state rather than what was running at startup.
+        self.m_send_to = m_edit.addMenu("Send &To")
+        self.m_send_to.aboutToShow.connect(self._populate_send_to_menu)
+        m_edit.addSeparator()
         m_edit.addAction(self.act_settings)
         m_insert = mb.addMenu("&Insert")
         m_insert.addAction(self.act_insert_image)
@@ -2430,6 +2435,59 @@ class MainWindow(QMainWindow):
         existing.insert(0, path)
         del existing[5:]
         self._settings.setValue("recent_notebooks", existing)
+
+    def _populate_send_to_menu(self) -> None:
+        """Rebuild the qdistro Send-To submenu from the broker.
+
+        Pulls the current page's text (or the selection if any) as the
+        payload, then asks the broker for every registered receiver
+        and offers one menu entry per peer. Same-silo deliveries take
+        the broker's fast path; cross-silo trips the admin approval
+        prompt.
+        """
+        self.m_send_to.clear()
+        try:
+            from qnotebook import qdistro_integration as _qi
+        except ImportError:
+            act = self.m_send_to.addAction("(qdistro SDK not available)")
+            act.setEnabled(False)
+            return
+        payload = self._collect_send_to_payload()
+        targets = _qi.send_to_targets(kind="text/plain")
+        if not targets:
+            act = self.m_send_to.addAction("(no receivers running)")
+            act.setEnabled(False)
+            return
+        for row in targets:
+            label = row["name"]
+            silo = row.get("silo") or ""
+            if silo:
+                label = f"{label}  [{silo}]"
+            act = self.m_send_to.addAction(label)
+            if not payload:
+                act.setEnabled(False)
+                act.setToolTip("Open a page first")
+            else:
+                uid = int(row["uid"])
+                svc = str(row["service"])
+                act.triggered.connect(
+                    lambda _checked=False, u=uid, s=svc, p=payload:
+                        _qi.send_payload(u, s, p, kind="text/plain"))
+
+    def _collect_send_to_payload(self) -> str:
+        editor = getattr(self, "editor", None)
+        if editor is None:
+            return ""
+        try:
+            cur = editor.textCursor()
+            sel = cur.selectedText()
+            if sel:
+                # QTextCursor returns U+2029 for paragraph breaks;
+                # normalise to \n so receivers don't see funky chars.
+                return str(sel).replace("\u2029", "\n").replace("\u2028", "\n")
+            return str(editor.toPlainText())
+        except Exception:
+            return ""
 
     def _populate_recent_notebooks_menu(self) -> None:
         self.m_recent_notebooks.clear()
