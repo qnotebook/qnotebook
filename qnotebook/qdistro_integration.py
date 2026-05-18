@@ -1,7 +1,7 @@
 """Wire qnotebook into the qdistro App1 launcher contract.
 
 On registration, qnotebook claims
-``com.qdistro.QNotebook.uid<NNNN>`` on the session bus. Inbound
+``org.qdistro.QNotebook.uid<NNNN>`` on the session bus. Inbound
 payloads (Send-To from qterminator, qfileman, …) are appended to the
 currently open page, or — if no page is open — buffered as a "Drafts"
 page named ``inbox-YYYY-MM-DD``. Either way the receive is durable
@@ -91,7 +91,7 @@ def send_to_targets(*, kind: str = "text/plain") -> list[dict]:
     if _app_receiver is None:
         return []
     try:
-        self_service = f"com.qdistro.{APP_FRIENDLY_NAME}.uid{os.geteuid()}"
+        self_service = f"org.qdistro.{APP_FRIENDLY_NAME}.uid{os.geteuid()}"
         return _app_receiver.send_to_menu_targets(
             self_service=self_service, kind=kind)
     except Exception as e:  # noqa: BLE001
