@@ -575,7 +575,9 @@ def _apply_list_format(cursor: QTextCursor, list_stack: list[tuple[str, int]], e
         lf.setStyle(styles[(depth - 1) % 3])
     else:
         lf.setStyle(QTextListFormat.Style.ListDecimal)
-        lf.setStart(start)
+        set_start = getattr(lf, "setStart", None)
+        if set_start is not None:
+            set_start(start)
     return cursor.createList(lf)
 
 
