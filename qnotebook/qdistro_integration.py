@@ -26,7 +26,7 @@ except ImportError:
     _app_receiver = None  # type: ignore[assignment]
 
 
-APP_FRIENDLY_NAME = "QNotebook"
+APP_FRIENDLY_NAME = "Qnotebook"
 APP_SUPPORTED_KINDS = ("text/*", "application/octet-stream")
 
 
