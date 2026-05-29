@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 
 SRC = Path(__file__).parent.parent / "qnotebook"
 
@@ -33,6 +35,19 @@ PATTERNS = [
 ]
 
 
+@pytest.mark.cheat_aware(
+    protects="every user-content write routes through SafeWriter's atomic + "
+    "3-way-merge path; no module sneaks in a raw write_text/write_bytes/open",
+    severity="critical",
+    cheats=[
+        "add the offending module to EXEMPT_MODULES instead of routing it "
+        "through safe_save",
+        "sprinkle `# safe-writer-exempt` on a real user-content write",
+        "weaken PATTERNS so a raw write stops matching",
+    ],
+    consequence="a non-atomic, non-merging write bypasses crash-safety and "
+    "concurrent-edit protection, risking torn files and lost edits",
+)
 def test_no_direct_write_outside_exempt() -> None:
     offenders: list[str] = []
     for p in SRC.rglob("*.py"):

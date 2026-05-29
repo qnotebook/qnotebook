@@ -31,6 +31,20 @@ def test_trivial_rung_disk_unchanged(tmp_path: Path) -> None:
     assert p.read_bytes() == E
 
 
+@pytest.mark.cheat_aware(
+    protects="when an external process and the editor change disjoint lines, "
+    "the 3-way merge keeps BOTH edits — neither side's content is dropped",
+    severity="critical",
+    cheats=[
+        "loosen the final assert to only `result.ok` and drop the "
+        "`A_ext`/`E_ours` content checks",
+        "widen `result.rung in (...)` to accept a rung that overwrites "
+        "instead of merging",
+        "make ours == external so there is nothing real to merge",
+    ],
+    consequence="a concurrent save (another app, Syncthing) silently "
+    "overwrites the user's other edit — irreversible note data loss",
+)
 def test_disjoint_hunks_fast_path(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
     O = b"A\nB\nC\nD\nE\n"

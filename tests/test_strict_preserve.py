@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from qnotebook import nb_settings, safe_save
 from qnotebook.notebook import Notebook
 from qnotebook.safe_save import LoadResult, SafeWriter, sha256_bytes
@@ -14,6 +16,20 @@ def _load(original: bytes, baseline: bytes) -> LoadResult:
                       hash_original=sha256_bytes(original))
 
 
+@pytest.mark.cheat_aware(
+    protects="strict_preserve (the default) keeps the user's original byte "
+    "formatting (e.g. Obsidian `rating:: 9`) that our serializer would "
+    "otherwise canonicalize away",
+    severity="high",
+    cheats=[
+        "assert only r.ok and drop the `b'rating:: 9' in p.read_bytes()` "
+        "check",
+        "flip the test to call save with strict_preserve=False",
+        "change the baseline so canonicalization becomes a no-op",
+    ],
+    consequence="loading then saving an untouched note silently rewrites "
+    "plugin/non-standard syntax, corrupting third-party (Obsidian/Zim) vaults",
+)
 def test_strict_preserve_default_restores(tmp_path: Path) -> None:
     p = tmp_path / "n.md"
     p.write_bytes(b"rating:: 9\nbody\n")

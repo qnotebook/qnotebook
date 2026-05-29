@@ -54,6 +54,18 @@ def test_atomic_write_same_dir_tempfile_stays_local(tmp_path: Path) -> None:
     assert calls and Path(calls[0]) == (tmp_path / "sub")
 
 
+@pytest.mark.cheat_aware(
+    protects="a reader (e.g. Syncthing, another editor) never observes a "
+    "partially-written / truncated note while we save",
+    severity="critical",
+    cheats=[
+        "drop the `data not in (content_a, content_b)` torn-read check",
+        "shrink the loop count or content size so a torn window never opens",
+        "swallow the torn read into a skip instead of appending to errors",
+    ],
+    consequence="a concurrent reader copies a half-written note; the user's "
+    "content is silently corrupted or lost via sync",
+)
 def test_reader_never_sees_truncated_content(tmp_path: Path) -> None:
     """Continuously read while writing — every full read must be valid."""
     p = tmp_path / "note.md"
