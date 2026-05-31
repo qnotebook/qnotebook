@@ -43,6 +43,53 @@ def test_user_plugin_loaded_from_notebook(tmp_path: Path):
     infos = plugins_mod.discover(root)
     user = [i for i in infos if i.source == "user"]
     assert any(i.name == "My Plug" for i in user)
+    assert all(i.plugin is None for i in user)
+
+
+def test_user_plugin_discovery_does_not_execute_code(tmp_path: Path):
+    root = tmp_path / "nb"
+    root.mkdir()
+    marker = tmp_path / "executed"
+    plugdir = root / ".qnotebook" / "plugins"
+    plugdir.mkdir(parents=True)
+    (plugdir / "side_effect.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('ran')\n"
+        "class Plugin:\n"
+        "    name = 'Side Effect'\n"
+        "    description = 'must not run on discover'\n"
+        "    def setup(self, w):\n"
+        "        w.side_effect = True\n",
+        encoding="utf-8",
+    )
+    infos = plugins_mod.discover(root)
+    assert any(i.name == "Side Effect" for i in infos)
+    assert not marker.exists()
+
+
+def test_enabled_user_plugin_executes_at_setup_only(tmp_path: Path):
+    root = tmp_path / "nb"
+    root.mkdir()
+    marker = tmp_path / "executed"
+    plugdir = root / ".qnotebook" / "plugins"
+    plugdir.mkdir(parents=True)
+    (plugdir / "side_effect.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('imported')\n"
+        "class Plugin:\n"
+        "    name = 'Side Effect'\n"
+        "    description = 'runs only when enabled'\n"
+        "    def setup(self, w):\n"
+        "        w.side_effect = True\n",
+        encoding="utf-8",
+    )
+    infos = plugins_mod.discover(root)
+    assert not marker.exists()
+    window = type("Window", (), {})()
+    activated = plugins_mod.setup_enabled(window, infos, {"user:side_effect"})
+    assert activated == ["user:side_effect"]
+    assert marker.read_text(encoding="utf-8") == "imported"
+    assert window.side_effect is True
 
 
 def test_window_plugins_menu_populated(qapp, tmp_notebook: Path, qtbot):

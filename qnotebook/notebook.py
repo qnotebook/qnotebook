@@ -18,14 +18,25 @@ from . import snapshots as _snapshots
 DOTDIR = ".qnotebook"
 
 
-def page_to_relpath(page: str) -> Path:
-    """`Foo:Bar` -> `Foo/Bar.md`."""
+def _page_parts(page: str) -> list[str]:
     if not page:
         raise ValueError("empty page path")
     parts = page.split(":")
     for p in parts:
-        if not p or "/" in p or "\\" in p:
+        if (
+            not p
+            or p in (".", "..")
+            or "/" in p
+            or "\\" in p
+            or any(ord(ch) < 32 for ch in p)
+        ):
             raise ValueError(f"invalid page component: {p!r}")
+    return parts
+
+
+def page_to_relpath(page: str) -> Path:
+    """`Foo:Bar` -> `Foo/Bar.md`."""
+    parts = _page_parts(page)
     return Path(*parts[:-1], parts[-1] + ".md")
 
 
@@ -40,7 +51,7 @@ def relpath_to_page(rel: Path) -> str:
 
 def page_to_dirpath(page: str) -> Path:
     """Directory that holds children of `page`."""
-    return Path(*page.split(":"))
+    return Path(*_page_parts(page))
 
 
 @dataclass(frozen=True)

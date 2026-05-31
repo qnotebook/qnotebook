@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 
 from qnotebook.index import Index, rewrite_wikilinks
-from qnotebook.notebook import Notebook, PageRef, page_to_relpath, relpath_to_page
+from qnotebook.notebook import (
+    Notebook,
+    PageRef,
+    page_to_dirpath,
+    page_to_relpath,
+    relpath_to_page,
+)
 
 
 def test_page_to_relpath_roundtrip():
@@ -22,6 +28,21 @@ def test_page_to_relpath_rejects_empty():
 def test_page_to_relpath_rejects_slash():
     with pytest.raises(ValueError):
         page_to_relpath("Foo/Bar")
+
+
+@pytest.mark.parametrize("page", ["..", "Foo:..", ".", "Foo:."])
+def test_page_helpers_reject_dot_components(page):
+    with pytest.raises(ValueError):
+        page_to_relpath(page)
+    with pytest.raises(ValueError):
+        page_to_dirpath(page)
+
+
+def test_page_to_dirpath_rejects_separator_components():
+    with pytest.raises(ValueError):
+        page_to_dirpath("Foo/Bar")
+    with pytest.raises(ValueError):
+        page_to_dirpath("Foo\\Bar")
 
 
 def test_create_and_get(tmp_path: Path):
