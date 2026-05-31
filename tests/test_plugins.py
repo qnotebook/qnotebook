@@ -111,6 +111,30 @@ def test_enabling_plugin_persists(qapp, tmp_notebook: Path, qtbot):
     assert "word_of_the_day" in [str(x) for x in enabled]
 
 
+def test_toggle_user_plugin_activates_immediately(qapp, tmp_path: Path, qtbot):
+    root = tmp_path / "nb"
+    root.mkdir()
+    plugdir = root / ".qnotebook" / "plugins"
+    plugdir.mkdir(parents=True)
+    (plugdir / "myplug.py").write_text(
+        "class Plugin:\n"
+        "    name = 'My Plug'\n"
+        "    description = 'test'\n"
+        "    def setup(self, w):\n"
+        "        w._myplug_setup_called = True\n",
+        encoding="utf-8",
+    )
+    w = MainWindow()
+    w.open_notebook(str(root))
+    qtbot.addWidget(w)
+    assert not hasattr(w, "_myplug_setup_called")
+    w._toggle_plugin("user:myplug", True)
+    assert w._myplug_setup_called is True
+    s = QSettings("qnotebook", "qnotebook")
+    enabled = s.value("plugins_enabled", [], type=list) or []
+    assert "user:myplug" in [str(x) for x in enabled]
+
+
 def test_word_count_plugin_runs(qapp, tmp_notebook: Path, qtbot):
     s = QSettings("qnotebook", "qnotebook")
     s.setValue("plugins_enabled", ["word_of_the_day"])

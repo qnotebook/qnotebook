@@ -868,10 +868,8 @@ class MainWindow(QMainWindow):
             # Activate immediately if discovered
             for info in getattr(self, "_plugin_infos", []):
                 if info.key == key:
-                    try:
-                        info.plugin.setup(self)
-                    except Exception:
-                        pass
+                    from . import plugins as plugins_mod
+                    plugins_mod.setup_enabled(self, [info], {key})
                     break
         else:
             cur.discard(key)
