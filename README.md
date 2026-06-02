@@ -3,6 +3,18 @@
 A PyQt6 wiki editor with true WYSIWYG editing over plain markdown files.
 Heavily inspired by Zim Desktop Wiki, but written from the ground up in PyQt6 over plain markdown files. No code shared with Zim.
 
+## Role in qdistro
+
+qnotebook is the first-party notes/wiki app for qdistro. It stores plain
+Markdown so notebooks remain inspectable, scriptable, and easy for the owner or
+an LLM assistant to modify. In qdistro sessions it is intended to be a
+low-friction target for captured text, links, and research artifacts from other
+silos.
+
+Inbound qdistro App1 delivery should be treated as a data-integrity boundary:
+large or non-text payloads need staging/confirmation before they are appended to
+the active document.
+
 ## Quick start
 
 ```bash
