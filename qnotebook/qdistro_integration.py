@@ -14,11 +14,33 @@ App1 payloads into the active document"):
 
   * payloads larger than ``MAX_PAYLOAD_BYTES`` are rejected with a
     clear status message — never appended, never truncated-silently;
-  * ``application/octet-stream`` (and any non-``text/*`` kind) is
-    refused: qnotebook has no file-attachment path, so binary must not
-    be splatted into the editor as text;
-  * accepted text is staged in an inbox and the user must confirm via
-    a dialog before it is appended to the active page.
+  * only the intended text kinds (``text/plain`` / ``text/markdown``)
+    are accepted: qnotebook has no file-attachment path, so binary —
+    and anything that could be mistaken for renderable/active content
+    such as ``text/html`` — must not be splatted into the editor;
+  * accepted text is staged in a **bounded** inbox and the user must
+    confirm via a single, serialized dialog before it is appended to
+    the active page.
+
+DoS hardening (see review finding "unbounded inbox DoS + over-broad
+kind"):
+
+  * the staged-drop inbox is capped at ``MAX_PENDING_DROPS``. A remote
+    App1 sender that floods drops the user never dismisses cannot grow
+    process memory without bound — beyond the cap, *new* drops are
+    refused rather than buffered (the already-queued drops keep their
+    place in line).
+  * confirmation dialogs are **serialized**: at most one modal
+    ``QMessageBox`` is open at a time. A flood of inbound drops can no
+    longer stack arbitrarily many simultaneous dialogs; queued drops
+    are confirmed one-by-one as the user answers each.
+  * a **declined** drop is intentionally **discarded** (evicted from
+    the inbox), not durably buffered. The prior build wrote unconfirmed
+    remote drops to a dated Drafts page; that recovery surface is
+    deliberately removed so a hostile sender cannot durably plant
+    content via a flood of declines. Discarding is the documented,
+    intentional disposition — there is no recovery surface for declined
+    remote drops.
 
 Degrades to a no-op when ``dbus-python`` is missing or the session
 bus isn't reachable; the rest of the editor behaves identically to a
@@ -42,17 +64,34 @@ except ImportError:
 
 
 APP_FRIENDLY_NAME = "Qnotebook"
-# qnotebook is a *text* notebook. We advertise only text kinds so the
-# broker / Send-To menu never offers qnotebook as a sink for binary.
-# application/octet-stream is intentionally NOT here (no attachment
-# path), and _deliver_to_page rejects it defensively even if a sender
-# ignores the advertised kinds.
-APP_SUPPORTED_KINDS = ("text/*",)
+# qnotebook is a *text* notebook. We advertise only the concrete text
+# kinds we are willing to land verbatim so the broker / Send-To menu
+# never offers qnotebook as a sink for binary. application/octet-stream
+# is intentionally NOT here (no attachment path), and _deliver_to_page
+# rejects anything outside ACCEPTED_TEXT_KINDS defensively even if a
+# sender ignores the advertised kinds.
+APP_SUPPORTED_KINDS = ("text/plain", "text/markdown")
+
+# The exact set of inbound kinds _deliver_to_page will stage. We
+# deliberately do NOT accept the whole ``text/*`` tree:
+#   * text/html (and other markup) could be mistaken for renderable or
+#     active content; we only ever land literal text via insertText, so
+#     accepting it adds confusion with no benefit;
+#   * matching is case-sensitive to stay aligned with the broker's
+#     case-sensitive CanReceive prefix probe (no quiet divergence).
+ACCEPTED_TEXT_KINDS = ("text/plain", "text/markdown")
 
 # Hard cap on an accepted inbound payload. Above this we refuse rather
 # than freeze the editor / bloat the page. 256 KiB is generous for a
 # Send-To text drop while still bounding a hostile or runaway sender.
 MAX_PAYLOAD_BYTES = 256 * 1024
+
+# Hard cap on how many staged-but-unconfirmed drops we will hold at
+# once. A remote App1 sender that floods drops the user never answers
+# cannot grow the inbox (and thus process memory) past this; beyond it,
+# new drops are refused. Small on purpose: a confirmation backlog of
+# more than a handful is already a UX failure, never a feature.
+MAX_PENDING_DROPS = 8
 
 
 @dataclass
@@ -71,6 +110,10 @@ class StagedDrop:
     received_at: str = field(
         default_factory=lambda:
         datetime.datetime.now().isoformat(timespec="seconds"))
+    # Set True by _stage_for_confirmation when the inbox is full and this
+    # drop was refused rather than queued. Lets callers/tests distinguish
+    # "staged" from "rejected at the door" without re-reading the inbox.
+    refused: bool = False
 
     @property
     def size_bytes(self) -> int:
@@ -82,10 +125,16 @@ class StagedDrop:
 
 
 def _is_text_kind(kind: str) -> bool:
-    """True only for ``text/...`` kinds. Everything else (including
-    ``application/octet-stream``) is refused — qnotebook has no
-    file-attachment path to land binary safely."""
-    return isinstance(kind, str) and kind.lower().startswith("text/")
+    """True only for the concrete kinds in :data:`ACCEPTED_TEXT_KINDS`
+    (``text/plain`` / ``text/markdown``).
+
+    Everything else is refused — ``application/octet-stream`` and other
+    binary (no file-attachment path to land it safely), and also
+    ``text/html`` and the rest of the ``text/*`` tree: we only ever land
+    literal text via ``insertText``, so accepting markup buys nothing
+    and risks confusion. Matching is case-sensitive to stay aligned with
+    the broker's case-sensitive CanReceive prefix probe."""
+    return isinstance(kind, str) and kind in ACCEPTED_TEXT_KINDS
 
 
 def _status(window, msg: str, timeout_ms: int = 6000) -> None:
@@ -136,11 +185,11 @@ def _deliver_to_page(window, kind: str, payload: str) -> None:
     callers/tests; the GUI path ignores it.
     """
     payload = "" if payload is None else str(payload)
-    # 1. Content-kind enforcement: refuse binary / non-text outright.
+    # 1. Content-kind enforcement: refuse binary / non-text / markup.
     if not _is_text_kind(kind):
         _status(window,
                 f"qdistro: refused {kind!r} payload — qnotebook only "
-                f"accepts text (no file-attachment path)")
+                f"accepts {', '.join(ACCEPTED_TEXT_KINDS)}")
         return None
     # 2. Size cap: refuse (do not truncate-into-the-page) oversized drops.
     size = len(payload.encode("utf-8", errors="replace"))
@@ -176,14 +225,8 @@ def _confirm_drop(window, drop: "StagedDrop") -> bool:
     return box.exec() == QMessageBox.StandardButton.Yes
 
 
-def _stage_for_confirmation(window, drop: "StagedDrop") -> None:
-    """Hold the drop in an inbox, prompt the user, and only on an
-    explicit yes append it to the active page.
-
-    The pending drop is recorded on ``window._qdistro_inbox`` so it is
-    not lost if the dialog is dismissed and so it is inspectable for
-    tests / debugging.
-    """
+def _inbox(window) -> list:
+    """Return (creating if needed) the bounded staged-drop queue."""
     inbox = getattr(window, "_qdistro_inbox", None)
     if inbox is None:
         inbox = []
@@ -191,21 +234,85 @@ def _stage_for_confirmation(window, drop: "StagedDrop") -> None:
             window._qdistro_inbox = inbox
         except Exception:  # noqa: BLE001
             pass
-    inbox.append(drop)
+    return inbox
 
-    try:
-        if not _confirm_drop(window, drop):
-            _status(window, f"qdistro: held {drop.size_bytes}-byte {drop.kind} "
-                            f"drop in inbox (not appended)")
-            return
-        _append_confirmed(window, drop)
+
+def _stage_for_confirmation(window, drop: "StagedDrop") -> None:
+    """Enqueue the drop in a **bounded** inbox and kick the serialized
+    confirmation pump.
+
+    Bounding: if the inbox already holds :data:`MAX_PENDING_DROPS`
+    pending drops, the new one is **refused** (not buffered) — a flood
+    of un-answered drops from a hostile App1 sender cannot grow process
+    memory without bound. The drops already in line keep their place.
+
+    Serialization: confirmation is driven by :func:`_pump_inbox`, which
+    shows at most one modal dialog at a time (guarded by
+    ``window._qdistro_dialog_open``). A burst of inbound drops therefore
+    cannot stack arbitrarily many simultaneous ``QMessageBox`` dialogs;
+    each is answered before the next is shown.
+    """
+    inbox = _inbox(window)
+    if len(inbox) >= MAX_PENDING_DROPS:
+        _status(window,
+                f"qdistro: inbox full ({MAX_PENDING_DROPS} pending) — "
+                f"refused {drop.size_bytes}-byte {drop.kind} drop")
+        # Caller (_deliver_to_page) returned this drop, but it was NOT
+        # accepted into the queue; mark it so tests/callers can tell.
+        drop.refused = True
+        return
+    inbox.append(drop)
+    _pump_inbox(window)
+
+
+def _pump_inbox(window) -> None:
+    """Process staged drops one at a time, never showing more than one
+    confirmation dialog concurrently.
+
+    ``window._qdistro_dialog_open`` serializes the modal prompt: while a
+    confirmation is in flight, further inbound drops only enqueue (up to
+    the cap) and return immediately. When the user answers, this pump
+    drains the next drop. A *declined* drop is discarded (evicted), per
+    the documented disposition — there is no Drafts/recovery surface for
+    unconfirmed remote drops.
+    """
+    if getattr(window, "_qdistro_dialog_open", False):
+        return
+    inbox = _inbox(window)
+    while inbox:
+        drop = inbox[0]
+        try:
+            window._qdistro_dialog_open = True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            confirmed = _confirm_drop(window, drop)
+        except Exception as e:  # noqa: BLE001
+            print(f"[qnotebook/qdistro] confirmation failed: {e}",
+                  file=sys.stderr, flush=True)
+            confirmed = False
+        finally:
+            try:
+                window._qdistro_dialog_open = False
+            except Exception:  # noqa: BLE001
+                pass
+        # The drop we just judged is always removed from the queue: on
+        # yes it is appended, on no it is discarded (documented: declined
+        # remote drops are NOT durably buffered).
         try:
             inbox.remove(drop)
         except ValueError:
             pass
-    except Exception as e:  # noqa: BLE001
-        print(f"[qnotebook/qdistro] staging failed: {e}",
-              file=sys.stderr, flush=True)
+        if confirmed:
+            try:
+                _append_confirmed(window, drop)
+            except Exception as e:  # noqa: BLE001
+                print(f"[qnotebook/qdistro] append failed: {e}",
+                      file=sys.stderr, flush=True)
+        else:
+            _status(window,
+                    f"qdistro: discarded {drop.size_bytes}-byte "
+                    f"{drop.kind} drop (declined)")
 
 
 def _append_confirmed(window, drop: "StagedDrop") -> None:

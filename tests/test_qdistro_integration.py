@@ -109,7 +109,10 @@ def test_non_text_kind_is_refused(qapp):
 
 def test_octet_stream_not_in_advertised_kinds():
     assert "application/octet-stream" not in qi.APP_SUPPORTED_KINDS
-    assert qi.APP_SUPPORTED_KINDS == ("text/*",)
+    # Advertised kinds were tightened from the broad ("text/*",) tree to the
+    # exact text kinds we land verbatim, so the broker never offers qnotebook
+    # as a sink for binary or markup.
+    assert qi.APP_SUPPORTED_KINDS == ("text/plain", "text/markdown")
 
 
 # --------------------------------------------------------------------------
@@ -158,14 +161,18 @@ def test_at_limit_payload_is_accepted(qapp):
     ],
     consequence="a remote sender silently edits the user's open document",
 )
-def test_text_staged_and_held_when_declined(qapp):
+def test_text_discarded_when_declined(qapp):
+    """A declined drop must NOT mutate the page and must be discarded
+    from the inbox — declined remote drops are intentionally not durably
+    buffered (no Drafts/recovery surface), so they cannot accumulate."""
     w = _FakeWindow(autoconfirm=False)  # user says No
     before = _editor_text(w)
     drop = qi._deliver_to_page(w, "text/plain", "hello from afar")
     assert drop is not None, "text should be staged"
     assert _editor_text(w) == before, "text appended despite decline"
-    # declined drop is retained in the inbox so it isn't lost
-    assert drop in w._qdistro_inbox
+    # declined drop is discarded — not left lingering in the inbox
+    assert drop not in getattr(w, "_qdistro_inbox", [])
+    assert getattr(w, "_qdistro_inbox", []) == []
     assert drop.sender, "staged record must carry sender provenance"
     assert drop.kind == "text/plain"
     w.close()
@@ -180,6 +187,157 @@ def test_text_appended_only_after_confirmation(qapp):
     assert drop not in getattr(w, "_qdistro_inbox", [])
     # provenance header was written
     assert "from" in _editor_text(w) and drop.kind in _editor_text(w)
+    w.close()
+
+
+# --------------------------------------------------------------------------
+# 4. inbox bounding + dialog serialization (DoS hardening)
+# --------------------------------------------------------------------------
+@pytest.mark.cheat_aware(
+    protects="the staged-drop inbox is bounded so a flood of un-answered "
+    "remote drops cannot grow process memory without limit",
+    severity="medium",
+    cheats=[
+        "raise MAX_PENDING_DROPS so the flood fits",
+        "append past the cap instead of refusing",
+        "keep declined drops in the inbox so they accumulate",
+    ],
+    consequence="a hostile App1 sender exhausts memory by sending drops the "
+    "user never dismisses",
+)
+def test_inbox_is_bounded_under_flood(qapp):
+    """Simulate a sender that floods drops the user never answers: while
+    a confirmation is 'open' (dialog in flight) every further inbound
+    drop only enqueues, and the queue must never exceed the cap."""
+    w = _FakeWindow()  # no autoconfirm
+
+    flood = {"n": 0}
+
+    def _blocking_confirm(window, drop):
+        # Model the user staring at the first dialog: while it's open a
+        # burst of new drops arrives. They must enqueue (bounded), never
+        # stack new dialogs and never grow past the cap.
+        while flood["n"] < 1000:
+            flood["n"] += 1
+            qi._deliver_to_page(window, "text/plain", "x" * 10)
+            assert len(window._qdistro_inbox) <= qi.MAX_PENDING_DROPS, (
+                "inbox grew past MAX_PENDING_DROPS under flood: %d"
+                % len(window._qdistro_inbox))
+        return False  # decline this one; pump drains the rest as declines
+
+    import qnotebook.qdistro_integration as _qi
+    orig = _qi._confirm_drop
+    _qi._confirm_drop = _blocking_confirm
+    try:
+        # First drop opens the (fake) dialog, which floods more.
+        qi._deliver_to_page(w, "text/plain", "first")
+    finally:
+        _qi._confirm_drop = orig
+
+    # We attempted to enqueue >1000 drops; the inbox never exceeded the
+    # cap and is fully drained (all declined -> discarded) at the end.
+    assert flood["n"] >= 1000
+    assert w._qdistro_inbox == [], "inbox not drained after flood"
+    # nothing leaked into the page (all declined)
+    assert "x" * 10 not in _editor_text(w)
+    w.close()
+
+
+def test_drop_refused_when_inbox_full(qapp):
+    """Directly fill the inbox to the cap, then prove the next drop is
+    refused (marked refused, not appended to the queue)."""
+    w = _FakeWindow()
+    inbox = qi._inbox(w)
+    # Pre-fill to the cap with placeholder staged drops.
+    for i in range(qi.MAX_PENDING_DROPS):
+        inbox.append(qi.StagedDrop(kind="text/plain", payload=str(i)))
+    assert len(inbox) == qi.MAX_PENDING_DROPS
+    # A dialog is notionally "open" so the pump won't drain; the new
+    # drop must be refused outright rather than buffered.
+    w._qdistro_dialog_open = True
+    drop = qi._deliver_to_page(w, "text/plain", "one too many")
+    assert drop is not None
+    assert drop.refused is True, "over-cap drop was not marked refused"
+    assert drop not in inbox, "over-cap drop was buffered despite full inbox"
+    assert len(inbox) == qi.MAX_PENDING_DROPS, "inbox grew past the cap"
+    w.close()
+
+
+def test_dialogs_are_serialized(qapp):
+    """At most one confirmation runs at a time: _confirm_drop must never
+    be re-entered while a prior one is still in flight."""
+    w = _FakeWindow()
+    depth = {"cur": 0, "max": 0}
+
+    def _reentrant_confirm(window, drop):
+        depth["cur"] += 1
+        depth["max"] = max(depth["max"], depth["cur"])
+        # Provoke re-entrancy exactly once: stage one more drop mid-dialog and
+        # confirm the pump does NOT recurse into a second concurrent
+        # confirmation. Re-staging on *every* call would keep the pump's drain
+        # loop fed forever (each loop iteration removes one drop and this adds
+        # one), so guard it to a single nested delivery.
+        if not depth.get("provoked"):
+            depth["provoked"] = True
+            qi._deliver_to_page(window, "text/plain", "nested")
+        depth["cur"] -= 1
+        return False
+
+    import qnotebook.qdistro_integration as _qi
+    orig = _qi._confirm_drop
+    _qi._confirm_drop = _reentrant_confirm
+    try:
+        qi._deliver_to_page(w, "text/plain", "outer")
+    finally:
+        _qi._confirm_drop = orig
+
+    assert depth["max"] == 1, (
+        "confirmation dialog was re-entered (max concurrent depth %d > 1)"
+        % depth["max"])
+    w.close()
+
+
+# --------------------------------------------------------------------------
+# 5. tightened content kind (no text/html, no broad text/*)
+# --------------------------------------------------------------------------
+@pytest.mark.cheat_aware(
+    protects="only text/plain and text/markdown are staged; text/html and "
+    "other text/* subtypes are refused",
+    severity="low",
+    cheats=[
+        "widen _is_text_kind back to a text/* prefix match",
+        "add text/html to ACCEPTED_TEXT_KINDS",
+    ],
+    consequence="markup arrives where the user expects literal text, and the "
+    "advertised kinds diverge from what is actually accepted",
+)
+def test_text_html_is_refused(qapp):
+    w = _FakeWindow(autoconfirm=True)  # even if confirmed, must not insert
+    before = _editor_text(w)
+    result = qi._deliver_to_page(w, "text/html", "<b>hi</b>")
+    assert result is None, "text/html should be refused, not staged"
+    assert _editor_text(w) == before, "html leaked into the editor"
+    assert getattr(w, "_qdistro_inbox", []) == []
+    w.close()
+
+
+def test_accepted_kinds_are_exactly_plain_and_markdown(qapp):
+    assert qi.ACCEPTED_TEXT_KINDS == ("text/plain", "text/markdown")
+    assert qi.APP_SUPPORTED_KINDS == ("text/plain", "text/markdown")
+    assert qi._is_text_kind("text/plain")
+    assert qi._is_text_kind("text/markdown")
+    assert not qi._is_text_kind("text/html")
+    assert not qi._is_text_kind("text/rtf")
+    # case-sensitive to match the broker's CanReceive prefix probe
+    assert not qi._is_text_kind("TEXT/PLAIN")
+    assert not qi._is_text_kind("application/octet-stream")
+
+
+def test_markdown_is_accepted(qapp):
+    w = _FakeWindow(autoconfirm=True)
+    drop = qi._deliver_to_page(w, "text/markdown", "# heading")
+    assert drop is not None
+    assert "# heading" in _editor_text(w)
     w.close()
 
 
