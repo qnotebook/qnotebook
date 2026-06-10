@@ -31,6 +31,41 @@ def test_trivial_rung_disk_unchanged(tmp_path: Path) -> None:
     assert p.read_bytes() == E
 
 
+def test_fast_save_defers_strict_preserve_subprocess(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The GUI fast path must stop before strict-preserve's git fallback.
+
+    This is the common autosave exposure: baseline != original can require a
+    preserve merge even when the disk has not changed since load.
+    """
+    p = tmp_path / "note.md"
+    original = b"alpha\nbeta\n"
+    baseline = b"ALPHA\nBETA\n"
+    p.write_bytes(original)
+    lr = LoadResult(
+        original=original,
+        baseline=baseline,
+        hash_original=sha256_bytes(original),
+    )
+
+    monkeypatch.setattr(safe_save, "HAS_GIT_MERGE_FILE", True)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("fast save entered the subprocess merge rung")
+
+    monkeypatch.setattr(safe_save, "_git_merge_file", boom)
+
+    result = SafeWriter.save(
+        p, b"editor\nreplacement\n", lr, root=tmp_path,
+        allow_subprocess=False,
+    )
+    assert result.needs_merge
+    assert result.reason == "strict-preserve"
+    assert result.deferred is not None
+    assert p.read_bytes() == original
+
+
 @pytest.mark.cheat_aware(
     protects="when an external process and the editor change disjoint lines, "
     "the 3-way merge keeps BOTH edits — neither side's content is dropped",

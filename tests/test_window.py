@@ -157,6 +157,45 @@ def test_save_updates_index(win, tmp_notebook: Path, qapp):
     assert win.index.backlinks("NewTarget") == ["Other"]
 
 
+def test_save_merge_ladder_runs_off_gui_thread(win, tmp_notebook: Path,
+                                               qapp, qtbot, monkeypatch):
+    from PyQt6.QtCore import QThread
+    from PyQt6.QtGui import QTextCursor
+    from qnotebook import safe_save
+
+    win.load_page("Home")
+    cur = win.editor.textCursor()
+    cur.select(QTextCursor.SelectionType.Document)
+    cur.insertText("editor edit\n")
+    qapp.processEvents()
+
+    # Make the on-disk copy diverge after load so the save must leave the
+    # pure-Python fast path. The fake merge records the worker thread.
+    win._page_watcher.watch(None)
+    (tmp_notebook / "Home.md").write_text("external edit\n", encoding="utf-8")
+    seen = {}
+    main_thread = QThread.currentThread()
+
+    monkeypatch.setattr(safe_save, "HAS_GIT_MERGE_FILE", True)
+    monkeypatch.setattr(safe_save, "HAS_WIGGLE", False)
+    monkeypatch.setattr(safe_save, "HAS_MERGIRAF", False)
+
+    def fake_git_merge(_base, _ours, _theirs):
+        seen["thread"] = QThread.currentThread()
+        return True, b"merged by worker\n"
+
+    monkeypatch.setattr(safe_save, "_git_merge_file", fake_git_merge)
+
+    win._save_current()
+    assert win._pending_save_merges
+    qtbot.waitUntil(lambda: not win._pending_save_merges, timeout=5000)
+    qapp.processEvents()
+
+    assert seen["thread"] is not main_thread
+    assert (tmp_notebook / "Home.md").read_text(encoding="utf-8") == "merged by worker\n"
+    assert not win.editor.is_dirty()
+
+
 # ---- recent + bookmarks ----
 
 

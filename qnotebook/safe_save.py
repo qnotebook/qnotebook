@@ -15,9 +15,9 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 HAS_GIT_MERGE_FILE = shutil.which("git") is not None
@@ -112,6 +112,17 @@ class LoadResult:
     hash_original: str
 
 
+@dataclass
+class DeferredSave:
+    path: Path
+    editor_bytes: bytes
+    load: LoadResult
+    serialize_fn: Any = None
+    root: Optional[Path] = None
+    write: bool = True
+    strict_preserve: bool = True
+
+
 # ------------------------------------------------------------------
 # Save result
 # ------------------------------------------------------------------
@@ -119,7 +130,7 @@ class LoadResult:
 
 @dataclass
 class SaveResult:
-    status: str           # "ok" | "conflict" | "refused"
+    status: str           # "ok" | "conflict" | "refused" | "needs_merge"
     bytes: bytes = b""
     rung: str = ""
     reason: str = ""
@@ -127,6 +138,7 @@ class SaveResult:
     ours: bytes = b""
     theirs: bytes = b""
     conflict_markers: bytes = b""
+    deferred: Optional[DeferredSave] = None
 
     @property
     def ok(self) -> bool:
@@ -139,6 +151,10 @@ class SaveResult:
     @property
     def refused(self) -> bool:
         return self.status == "refused"
+
+    @property
+    def needs_merge(self) -> bool:
+        return self.status == "needs_merge"
 
 
 # ------------------------------------------------------------------
@@ -443,11 +459,21 @@ class SafeWriter:
         root: Optional[Path] = None,
         write: bool = True,
         strict_preserve: bool = True,
+        allow_subprocess: bool = True,
     ) -> SaveResult:
         path = Path(path)
         if isinstance(E, str):
             E = E.encode("utf-8")
         O = load.original
+        deferred = DeferredSave(
+            path=path,
+            editor_bytes=E,
+            load=load,
+            serialize_fn=serialize_fn,
+            root=root,
+            write=write,
+            strict_preserve=strict_preserve,
+        )
 
         # ---- preserve-phase: restore plugin-metadata-bearing lines the user
         # didn't touch. When the serializer canonicalized unknown constructs
@@ -459,6 +485,15 @@ class SafeWriter:
             if restored is not None:
                 E = restored
             elif HAS_GIT_MERGE_FILE:
+                if not allow_subprocess:
+                    return SaveResult(
+                        status="needs_merge",
+                        reason="strict-preserve",
+                        base=load.baseline,
+                        ours=E,
+                        theirs=load.original,
+                        deferred=deferred,
+                    )
                 clean, out = _git_merge_file(load.baseline, E, load.original)
                 if clean and _roundtrip_parses(out):
                     E = out
@@ -485,6 +520,18 @@ class SafeWriter:
                 atomic_write(path, merged)
             _log_rung(root, path, "disjoint-hunks")
             return SaveResult(status="ok", bytes=merged, rung="disjoint-hunks")
+
+        if not allow_subprocess and (
+            HAS_GIT_MERGE_FILE or HAS_WIGGLE or HAS_MERGIRAF
+        ):
+            return SaveResult(
+                status="needs_merge",
+                reason="external-merge",
+                base=O,
+                ours=E,
+                theirs=D,
+                deferred=deferred,
+            )
 
         # ---- rung (c): git merge-file
         if HAS_GIT_MERGE_FILE:
@@ -538,3 +585,17 @@ class SafeWriter:
             rung="conflict",
             conflict_markers=gmf_out,
         )
+
+
+def run_deferred_save(deferred: DeferredSave) -> SaveResult:
+    """Finish a save that the GUI fast path stopped before subprocess rungs."""
+    return SafeWriter.save(
+        deferred.path,
+        deferred.editor_bytes,
+        deferred.load,
+        deferred.serialize_fn,
+        root=deferred.root,
+        write=deferred.write,
+        strict_preserve=deferred.strict_preserve,
+        allow_subprocess=True,
+    )

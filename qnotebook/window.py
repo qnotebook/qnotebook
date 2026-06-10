@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSettings, QModelIndex
+from PyQt6.QtCore import (
+    QModelIndex,
+    QObject,
+    QRunnable,
+    QSettings,
+    Qt,
+    QThreadPool,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QAction, QKeySequence, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QApplication,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -340,6 +350,29 @@ from .notebook import Notebook
 from .page_model import PageTreeModel
 
 
+class _SaveMergeSignals(QObject):
+    finished = pyqtSignal(str, str, object, object)
+
+
+class _SaveMergeTask(QRunnable):
+    def __init__(self, page: str, md: str, deferred) -> None:
+        super().__init__()
+        self.page = page
+        self.md = md
+        self.deferred = deferred
+        self.signals = _SaveMergeSignals()
+
+    def run(self) -> None:
+        result = None
+        error = None
+        try:
+            from . import safe_save
+            result = safe_save.run_deferred_save(self.deferred)
+        except Exception as exc:  # pragma: no cover - surfaced through signal
+            error = exc
+        self.signals.finished.emit(self.page, self.md, result, error)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, notebook_path: str | None = None) -> None:
         super().__init__()
@@ -355,6 +388,8 @@ class MainWindow(QMainWindow):
         self.search: Search | None = None
         self.history = NavigationHistory()
         self._current_page: str | None = None
+        self._pending_save_merges: dict[str, _SaveMergeTask] = {}
+        self._pending_merge_again: set[str] = set()
 
         self._build_ui()
         self._build_actions()
@@ -979,21 +1014,75 @@ class MainWindow(QMainWindow):
     def _save_current(self) -> None:
         if self.notebook is None or self._current_page is None:
             return
+        page = self._current_page
+        if page in self._pending_save_merges:
+            self._pending_merge_again.add(page)
+            return
         md = self.editor.markdown()
-        lr = self._page_load_result.get(self._current_page)
-        result = self.notebook.save_page(self._current_page, md, load_result=lr)
+        lr = self._page_load_result.get(page)
+        result = self.notebook.save_page(
+            page, md, load_result=lr, allow_subprocess=False,
+        )
+        if result.needs_merge:
+            if result.deferred is None:
+                QMessageBox.warning(
+                    self, "Save failed",
+                    "Save requires a merge, but no deferred merge payload was created.",
+                )
+                return
+            self._dispatch_save_merge(page, md, result.deferred)
+            return
+        self._finish_save_result(page, md, result)
+
+    def _dispatch_save_merge(self, page: str, md: str, deferred) -> None:
+        if page == self._current_page and hasattr(self, "_page_watcher"):
+            self._page_watcher.watch(None)
+        task = _SaveMergeTask(page, md, deferred)
+        self._pending_save_merges[page] = task
+        task.signals.finished.connect(
+            self._on_save_merge_finished,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        QThreadPool.globalInstance().start(task)
+
+    def _on_save_merge_finished(self, page: str, md: str, result, error) -> None:
+        self._pending_save_merges.pop(page, None)
+        rerun = page in self._pending_merge_again
+        self._pending_merge_again.discard(page)
+        if error is not None:
+            if page == self._current_page:
+                QMessageBox.warning(self, "Save failed", str(error))
+            return
+        if result is None:
+            return
+        if result.ok and self.notebook is not None:
+            try:
+                self._page_load_result[page] = self.notebook.load_for_save(page)
+            except Exception:
+                pass
+        if page != self._current_page or self.editor.markdown() != md:
+            if rerun and page == self._current_page and self.editor.is_dirty():
+                self._save_current()
+            return
+        self._finish_save_result(page, md, result)
+        if rerun and page == self._current_page and self.editor.is_dirty():
+            self._save_current()
+
+    def _finish_save_result(self, page: str, md: str,
+                            result) -> None:
+        if self.notebook is None:
+            return
         if result.conflict:
             from .merge_dialog import MergeDialog
             dlg = MergeDialog(result.base, result.ours, result.theirs,
-                              page_name=self._current_page, parent=self)
+                              page_name=page, parent=self)
             if dlg.exec() and dlg.outcome == MergeDialog.RESULT_MERGED:
                 from . import safe_save as _ss
-                _ss.atomic_write(self.notebook.file_for(self._current_page),
-                                 dlg.result_bytes)
+                _ss.atomic_write(self.notebook.file_for(page), dlg.result_bytes)
                 md = dlg.result_bytes.decode("utf-8", errors="replace")
                 rung = "user-merged"
             elif dlg.outcome == MergeDialog.RESULT_CONFLICT_FILE:
-                conflict_path = self.notebook.file_for(self._current_page).with_suffix(
+                conflict_path = self.notebook.file_for(page).with_suffix(
                     ".md.conflict")
                 from . import safe_save as _ss
                 _ss.atomic_write(conflict_path, dlg.result_bytes)
@@ -1003,14 +1092,13 @@ class MainWindow(QMainWindow):
         else:
             rung = result.rung
         if self.index:
-            self.index.update_page(self._current_page, md)
+            self.index.update_page(page, md)
         self.editor.clear_dirty()
         if hasattr(self, "_page_watcher"):
             self._page_watcher.rearm()
-        self._maybe_versioning_commit(self._current_page, rung=rung)
+        self._maybe_versioning_commit(page, rung=rung)
         # Refresh baseline for future saves
-        self._page_load_result[self._current_page] = self.notebook.load_for_save(
-            self._current_page)
+        self._page_load_result[page] = self.notebook.load_for_save(page)
         self._refresh_backlinks()
         self._refresh_tags()
         self._refresh_toc()
@@ -1037,10 +1125,23 @@ class MainWindow(QMainWindow):
         otherwise the deferred commit would record a spurious deletion of the
         old path and leave the saved content uncommitted at the new one."""
         try:
+            self._drain_pending_save_merges(-1)
             from . import versioning
             versioning.wait_for_pending_commits(-1)
         except Exception:
             pass
+
+    def _drain_pending_save_merges(self, timeout_ms: int = -1) -> bool:
+        app = QApplication.instance()
+        start = time.monotonic()
+        while self._pending_save_merges:
+            if app is not None:
+                app.processEvents()
+            else:
+                time.sleep(0.01)
+            if timeout_ms >= 0 and (time.monotonic() - start) * 1000 >= timeout_ms:
+                return False
+        return True
 
     def _apply_versioning_policy(self, root: Path) -> None:
         """New notebooks get versioning on silently. Existing notebooks that

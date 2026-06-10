@@ -159,6 +159,8 @@ class Notebook:
 
     def save_page(self, page: str, md_text: str,
                   load_result: "safe_save.LoadResult | None" = None,
+                  *,
+                  allow_subprocess: bool = True,
                   ) -> "safe_save.SaveResult":
         """Atomic save via SafeWriter (same-dir tempfile + fsync + merge ladder
         when ``load_result`` is supplied). Takes a pre-save snapshot of the
@@ -179,6 +181,7 @@ class Notebook:
         strict = bool(nb_settings.get(self.root, "strict_preserve", True))
         return safe_save.SafeWriter.save(
             f, data, load_result, root=self.root, strict_preserve=strict,
+            allow_subprocess=allow_subprocess,
         )
 
     def load_for_save(self, page: str) -> "safe_save.LoadResult":
