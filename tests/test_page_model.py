@@ -100,6 +100,40 @@ def test_drop_moves_page_under_parent(qapp, tmp_notebook: Path):
     idx.close()
 
 
+def test_drop_drains_pending_commit_before_move(qapp, tmp_notebook: Path):
+    """A drag-and-drop page move must drain any queued async versioning commit
+    first, so the saved content is committed at the old path (not lost as a
+    spurious deletion) before the file moves."""
+    import subprocess
+    from qnotebook import versioning
+    nb = Notebook(tmp_notebook)
+    idx = Index(nb)
+    idx.rebuild()
+    versioning.init_repo(tmp_notebook)
+    model = PageTreeModel(nb)
+    model.set_index(idx)
+    # Edit + queue an async commit for "Other", then immediately drag it.
+    (tmp_notebook / "Other.md").write_text("# Other\n\ndnd-race line\n")
+    versioning.commit_page_async(tmp_notebook, "Other", rung="trivial")
+    parent_idx = model.index_for_page("Sub")
+    ok = model.dropMimeData(
+        _mime_for("Other"), Qt.DropAction.MoveAction, -1, -1, parent_idx
+    )
+    assert ok
+    # The pre-move content was committed at the old path before the move.
+    sha = subprocess.run(
+        ["git", "log", "-1", "--pretty=%H", "--", "Other.md"],
+        cwd=str(tmp_notebook), capture_output=True, text=True,
+    ).stdout.strip()
+    assert sha, "queued commit was lost — drop raced the async commit"
+    content = subprocess.run(
+        ["git", "show", f"{sha}:Other.md"],
+        cwd=str(tmp_notebook), capture_output=True, text=True,
+    ).stdout
+    assert "dnd-race line" in content
+    idx.close()
+
+
 def test_drop_on_root_moves_to_top(qapp, tmp_notebook: Path):
     nb = Notebook(tmp_notebook)
     idx = Index(nb)

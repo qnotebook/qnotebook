@@ -1022,7 +1022,25 @@ class MainWindow(QMainWindow):
         if not bool(self._settings.value("versioning_enabled", False, type=bool)):
             return
         from . import versioning
-        versioning.commit_page(self.notebook.root, page, rung=rung)
+        # Dispatch the git commit to a background worker thread: `git add` +
+        # `commit` can take seconds on a large repo and would otherwise freeze
+        # the editor on every (auto)save. The commit is a fire-and-forget side
+        # effect — its result isn't consumed by the UI.
+        versioning.commit_page_async(self.notebook.root, page, rung=rung)
+
+    def _drain_pending_commits(self) -> None:
+        """Block until queued async commits finish.
+
+        Called before any operation that mutates page *paths* (rename, move,
+        delete): a queued commit stages by page-relative path at worker time,
+        so it must land against the still-current path before the file moves —
+        otherwise the deferred commit would record a spurious deletion of the
+        old path and leave the saved content uncommitted at the new one."""
+        try:
+            from . import versioning
+            versioning.wait_for_pending_commits(-1)
+        except Exception:
+            pass
 
     def _apply_versioning_policy(self, root: Path) -> None:
         """New notebooks get versioning on silently. Existing notebooks that
@@ -1503,6 +1521,8 @@ class MainWindow(QMainWindow):
         """Rename a page, rewrite inbound wikilinks, reload editor if open."""
         if self.notebook is None or self.index is None:
             return []
+        # Land any queued async commit before the page path changes.
+        self._drain_pending_commits()
         modified = self.index.rename_page_and_rewrite(old, new)
         if self.model:
             self.model.refresh()
@@ -1696,6 +1716,8 @@ class MainWindow(QMainWindow):
     def delete_page(self, page: str) -> None:
         if self.notebook is None or self.index is None:
             return
+        # Land any queued async commit before the page is removed.
+        self._drain_pending_commits()
         was_current = (self._current_page == page)
         self.index.delete_page_and_cleanup(page)
         if self.model:
@@ -2645,6 +2667,15 @@ class MainWindow(QMainWindow):
                 _session.save(self.notebook.root, _session.capture(self))
             except Exception:
                 pass
+        # Drain any in-flight async git commits so the last (auto)save isn't
+        # lost when the window closes. Wait unbounded: the commit is short on a
+        # normal repo, and dropping the final version-history commit (the whole
+        # point of versioning) is worse than a brief close delay.
+        try:
+            from . import versioning as _versioning
+            _versioning.wait_for_pending_commits(-1)
+        except Exception:
+            pass
         if self.index:
             self.index.close()
         # Release the per-notebook lock (only if we own it — read-only sessions

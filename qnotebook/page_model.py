@@ -211,6 +211,14 @@ class PageTreeModel(QAbstractItemModel):
             return False
         if self.notebook.exists(new_path):
             return False
+        # Land any queued async versioning commit before the page path moves,
+        # so the deferred path-scoped commit lands at the still-current path
+        # rather than recording a spurious deletion of the old one.
+        try:
+            from . import versioning
+            versioning.wait_for_pending_commits(-1)
+        except Exception:
+            pass
         if self._index is not None:
             self._index.move_page_and_rewrite(src_path, new_path)
         else:
