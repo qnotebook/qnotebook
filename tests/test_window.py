@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -193,7 +194,82 @@ def test_save_merge_ladder_runs_off_gui_thread(win, tmp_notebook: Path,
 
     assert seen["thread"] is not main_thread
     assert (tmp_notebook / "Home.md").read_text(encoding="utf-8") == "merged by worker\n"
+    assert win.editor.markdown() == "merged by worker\n"
     assert not win.editor.is_dirty()
+    assert win._page_watcher._current == str(tmp_notebook / "Home.md")
+
+
+def test_save_changed_during_async_merge_preserves_external_edits(
+    win, tmp_notebook: Path, qapp, qtbot, monkeypatch,
+):
+    from PyQt6.QtGui import QTextCursor
+    from qnotebook import safe_save
+
+    win.load_page("Home")
+    cur = win.editor.textCursor()
+    cur.select(QTextCursor.SelectionType.Document)
+    cur.insertText("editor first\n")
+    qapp.processEvents()
+
+    win._page_watcher.watch(None)
+    (tmp_notebook / "Home.md").write_text("external edit\n", encoding="utf-8")
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
+
+    monkeypatch.setattr(safe_save, "HAS_GIT_MERGE_FILE", True)
+    monkeypatch.setattr(safe_save, "HAS_WIGGLE", False)
+    monkeypatch.setattr(safe_save, "HAS_MERGIRAF", False)
+
+    def fake_git_merge(_base, ours, theirs):
+        calls.append((bytes(ours), bytes(theirs)))
+        if len(calls) == 1:
+            first_started.set()
+            assert release_first.wait(5)
+        return True, b"external edit\n" + bytes(ours)
+
+    monkeypatch.setattr(safe_save, "_git_merge_file", fake_git_merge)
+
+    win._save_current()
+    assert first_started.wait(5)
+
+    cur = win.editor.textCursor()
+    cur.movePosition(QTextCursor.MoveOperation.End)
+    cur.insertText("editor second\n")
+    qapp.processEvents()
+    release_first.set()
+
+    qtbot.waitUntil(
+        lambda: len(calls) >= 2 and not win._pending_save_merges,
+        timeout=5000,
+    )
+    qapp.processEvents()
+
+    disk = (tmp_notebook / "Home.md").read_text(encoding="utf-8")
+    assert "external edit" in disk
+    assert "editor second" in disk
+    assert "external edit" in win.editor.markdown()
+    assert "editor second" in win.editor.markdown()
+    assert not win.editor.is_dirty()
+
+
+def test_close_event_drains_pending_merges_before_commits(win, monkeypatch):
+    from PyQt6.QtGui import QCloseEvent
+    from qnotebook import versioning
+
+    calls = []
+    monkeypatch.setattr(
+        win, "_drain_pending_save_merges",
+        lambda timeout: calls.append(("merges", timeout)) or True,
+    )
+    monkeypatch.setattr(
+        versioning, "wait_for_pending_commits",
+        lambda timeout: calls.append(("commits", timeout)) or True,
+    )
+
+    win.closeEvent(QCloseEvent())
+    assert calls[:2] == [("merges", -1), ("commits", -1)]
 
 
 # ---- recent + bookmarks ----

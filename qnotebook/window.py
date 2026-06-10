@@ -1049,19 +1049,16 @@ class MainWindow(QMainWindow):
         self._pending_save_merges.pop(page, None)
         rerun = page in self._pending_merge_again
         self._pending_merge_again.discard(page)
+        if page == self._current_page:
+            self._watch_current_page()
         if error is not None:
             if page == self._current_page:
                 QMessageBox.warning(self, "Save failed", str(error))
             return
         if result is None:
             return
-        if result.ok and self.notebook is not None:
-            try:
-                self._page_load_result[page] = self.notebook.load_for_save(page)
-            except Exception:
-                pass
         if page != self._current_page or self.editor.markdown() != md:
-            if rerun and page == self._current_page and self.editor.is_dirty():
+            if page == self._current_page and self.editor.is_dirty():
                 self._save_current()
             return
         self._finish_save_result(page, md, result)
@@ -1091,11 +1088,24 @@ class MainWindow(QMainWindow):
                 return
         else:
             rung = result.rung
+            if (
+                page == self._current_page
+                and result.ok
+                and result.bytes
+                and result.bytes != md.encode("utf-8")
+            ):
+                md = result.bytes.decode("utf-8", errors="replace")
+                self.editor.load_markdown(
+                    md,
+                    page_path=page,
+                    base_path=self.notebook.file_for(page).parent,
+                    transclusion_resolver=self._make_transclusion_resolver(page),
+                )
         if self.index:
             self.index.update_page(page, md)
         self.editor.clear_dirty()
-        if hasattr(self, "_page_watcher"):
-            self._page_watcher.rearm()
+        if page == self._current_page:
+            self._watch_current_page()
         self._maybe_versioning_commit(page, rung=rung)
         # Refresh baseline for future saves
         self._page_load_result[page] = self.notebook.load_for_save(page)
@@ -1103,6 +1113,14 @@ class MainWindow(QMainWindow):
         self._refresh_tags()
         self._refresh_toc()
         self._update_status()
+
+    def _watch_current_page(self) -> None:
+        if (
+            self.notebook is not None
+            and self._current_page is not None
+            and hasattr(self, "_page_watcher")
+        ):
+            self._page_watcher.watch(self.notebook.file_for(self._current_page))
 
     def _maybe_versioning_commit(self, page: str, rung: str | None = None) -> None:
         if self.notebook is None:
@@ -2769,10 +2787,11 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         # Drain any in-flight async git commits so the last (auto)save isn't
-        # lost when the window closes. Wait unbounded: the commit is short on a
-        # normal repo, and dropping the final version-history commit (the whole
-        # point of versioning) is worse than a brief close delay.
+        # lost when the window closes. Wait unbounded: these operations are
+        # short on a normal repo, and dropping the final save/version-history
+        # update is worse than a brief close delay.
         try:
+            self._drain_pending_save_merges(-1)
             from . import versioning as _versioning
             _versioning.wait_for_pending_commits(-1)
         except Exception:
