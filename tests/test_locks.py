@@ -8,9 +8,8 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QSettings
-from qnotebook.window import MainWindow
-
 from qnotebook import locks
+from qnotebook.window import MainWindow
 
 
 @pytest.fixture(autouse=True)

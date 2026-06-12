@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QSettings
-from qnotebook.window import MainWindow
-
 from qnotebook import versioning
+from qnotebook.window import MainWindow
 
 
 def _has_git() -> bool:

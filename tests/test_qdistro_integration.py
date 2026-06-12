@@ -35,7 +35,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PyQt6 = pytest.importorskip("PyQt6", reason="PyQt6 not installed")
 from PyQt6.QtWidgets import QMainWindow, QTextEdit  # noqa: E402
-
 from qnotebook import qdistro_integration as qi  # noqa: E402
 
 

@@ -39,7 +39,6 @@ def test_quickswitcher_opens_via_window(qapp, tmp_notebook: Path, qtbot):
     w = MainWindow()
     w.open_notebook(str(tmp_notebook))
     qtbot.addWidget(w)
-    from qnotebook.quickswitcher import QuickSwitcher
     pages = w.index.all_pages()
     dlg = QuickSwitcher(pages, w)
     qtbot.addWidget(dlg)

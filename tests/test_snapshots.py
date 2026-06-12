@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qnotebook.notebook import Notebook
-
 from qnotebook import snapshots
+from qnotebook.notebook import Notebook
 
 
 def test_save_creates_snapshot(tmp_path: Path) -> None:

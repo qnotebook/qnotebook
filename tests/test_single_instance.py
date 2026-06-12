@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 import pytest
-
 from qnotebook import single_instance
 
 

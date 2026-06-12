@@ -17,7 +17,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from qnotebook import safe_save
 
 FIXTURES = Path(__file__).parent / "fixtures" / "obsidian_vault"

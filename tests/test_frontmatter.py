@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from qnotebook import frontmatter as fm
 from qnotebook.index import Index
 from qnotebook.notebook import Notebook
-
-from qnotebook import frontmatter as fm
 
 
 def test_split_no_frontmatter():

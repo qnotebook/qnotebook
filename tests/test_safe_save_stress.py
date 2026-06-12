@@ -12,9 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from qnotebook.safe_save import SafeWriter, atomic_write
-
 from qnotebook import safe_save
+from qnotebook.safe_save import SafeWriter, atomic_write
 
 
 def test_rapid_saves_no_torn_reads(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from qnotebook import safe_save
 from qnotebook.safe_save import (
     HAS_GIT_MERGE_FILE,
     HAS_MERGIRAF,
@@ -15,8 +16,6 @@ from qnotebook.safe_save import (
     atomic_write,
     sha256_bytes,
 )
-
-from qnotebook import safe_save
 
 
 def _lr(original: bytes) -> LoadResult:

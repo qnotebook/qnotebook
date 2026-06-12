@@ -10,10 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from qnotebook import safe_save
 from qnotebook.notebook import Notebook
 from qnotebook.window import MainWindow
-
-from qnotebook import safe_save
 
 
 def _read(p: Path) -> str:

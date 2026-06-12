@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QSettings
+from qnotebook import versioning
 from qnotebook.history_viewer import HistoryViewer, render_diff
 from qnotebook.window import MainWindow
-
-from qnotebook import versioning
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git not available"
