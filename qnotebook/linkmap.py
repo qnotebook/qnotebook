@@ -180,7 +180,6 @@ class LinkMapDock(QWidget):
         else:
             all_nodes = list(nodes)
         positions = force_layout(all_nodes, edges, radius=180.0)
-        center_pos = positions.get(current_page, (0.0, 0.0))
         for name, (x, y) in positions.items():
             self._add_node(name, QPointF(x, y), is_center=(name == current_page))
         for s, d in edges:

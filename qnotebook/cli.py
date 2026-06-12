@@ -90,7 +90,7 @@ def cmd_export(notebook: str, page: str, fmt: str, output: str) -> int:
     elif fmt == "pdf":
         # PDF export needs a QApplication — launch a minimal one.
         from PyQt6.QtWidgets import QApplication
-        app = QApplication.instance() or QApplication([])
+        _app = QApplication.instance() or QApplication([])
         export.export_page_pdf(nb, page, out)
     elif fmt == "md":
         out.parent.mkdir(parents=True, exist_ok=True)

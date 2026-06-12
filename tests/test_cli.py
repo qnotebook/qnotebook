@@ -96,8 +96,6 @@ def test_append_under_heading_creates(tmp_path: Path) -> None:
 def test_append_today_creates_journal(tmp_path: Path) -> None:
     rc = cli.run(["--append-today", str(tmp_path), "today-entry", "--bullet"])
     assert rc == 0
-    import time
-    today = time.strftime("Journal/%Y/%m/%d")
     # File exists under Journal/YYYY/MM/DD.md
     found = list(tmp_path.rglob("*.md"))
     assert any("today-entry" in p.read_text() for p in found)

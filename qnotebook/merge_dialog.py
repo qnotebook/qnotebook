@@ -49,7 +49,6 @@ def compute_hunks(base: bytes, ours: bytes, theirs: bytes) -> list[Hunk]:
     oa_ops = [op for op in oa.get_opcodes() if op[0] != "equal"]
     ob_ops = [op for op in ob.get_opcodes() if op[0] != "equal"]
 
-    all_starts = sorted({op[1] for op in oa_ops} | {op[1] for op in ob_ops})
     # Simpler: emit one hunk per OA op and one per OB op that overlaps.
     hunks: list[Hunk] = []
     for (_t, i1, i2, j1, j2) in oa_ops:

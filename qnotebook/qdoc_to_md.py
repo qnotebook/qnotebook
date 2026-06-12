@@ -25,7 +25,6 @@ def qdoc_to_markdown(doc: QTextDocument) -> str:
     blocks = _iter_blocks(doc)
 
     i = 0
-    in_code = False
     last_kind: str | None = None
     while i < len(blocks):
         block = blocks[i]
@@ -281,7 +280,6 @@ def _emit_table(table: QTextTable) -> str:
             cur_start = cell.firstCursorPosition()
             cur_end = cell.lastCursorPosition()
             # Collect inline from all blocks in this cell (usually one)
-            doc = table.document()
             block = cur_start.block()
             texts: list[str] = []
             is_header = r == 0

@@ -51,8 +51,6 @@ def test_parallel_edits_on_separate_pages_no_data_loss(tmp_path: Path) -> None:
     for p in pages.values():
         p.write_bytes(b"seed\n")
 
-    errors: list[str] = []
-
     def worker(name: str, path: Path) -> None:
         for i in range(20):
             lr = SafeWriter.load(path)

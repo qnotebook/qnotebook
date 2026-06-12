@@ -57,9 +57,6 @@ class ResolverActions:
         theirs = cf.path.read_bytes()
         # No true base — use ours as base so disjoint lines in theirs merge in.
         base = ours
-        result = safe_save.SaveResult(
-            status="ok", bytes=ours, rung="resolver-pass-through",
-        )
         # Delegate to git merge-file via SafeWriter internal helper
         from .safe_save import _git_merge_file
         clean, out = _git_merge_file(base, ours, theirs)

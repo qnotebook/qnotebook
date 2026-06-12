@@ -182,7 +182,6 @@ def _scan_single(
 ) -> None:
     # Only match `_x_` with non-word context on outside to avoid snake_case.
     i = 0
-    L = len(delim)
     while i < len(text):
         if text[i] == delim and (i == 0 or not text[i - 1].isalnum()):
             if i < len(consumed) and consumed[i]:
