@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 )
 
 from .editor import MarkdownEditor
+from .notebook import PageRef
 from .search import Search, Hit
 
 
