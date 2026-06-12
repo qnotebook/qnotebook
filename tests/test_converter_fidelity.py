@@ -233,7 +233,7 @@ class TestFirstPassTables:
         md = "| a | b |\n| --- | --- |\n| 1 | 2 |\n"
         out = _gen1(md)
         assert "|" in out
-        lines = [l for l in out.split("\n") if "|" in l]
+        lines = [line for line in out.split("\n") if "|" in line]
         assert len(lines) >= 3, f"Expected header + sep + row, got: {lines!r}"
 
     def test_table_header_content_preserved(self, qapp):
@@ -247,7 +247,7 @@ class TestFirstPassTables:
     def test_table_three_columns(self, qapp):
         md = "| x | y | z |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n"
         out = _gen1(md)
-        row_lines = [l for l in out.split("\n") if l.strip().startswith("|")]
+        row_lines = [line for line in out.split("\n") if line.strip().startswith("|")]
         # header, sep, data
         assert len(row_lines) >= 3
 
@@ -256,7 +256,7 @@ class TestFirstPassTables:
         md = "| a | b |\n| --- | --- |\n| 1 | 2 |\n"
         out = _gen1(md)
         lines = out.split("\n")
-        sep_lines = [l for l in lines if re.match(r"\|\s*[-:]+\s*\|", l)]
+        sep_lines = [line for line in lines if re.match(r"\|\s*[-:]+\s*\|", line)]
         assert sep_lines, f"No separator row in gen-1 output:\n{out!r}"
 
     def test_table_is_fixed_point(self, qapp):
@@ -337,7 +337,7 @@ class TestFirstPassNestedLists:
         md = "- top\n  - child\n"
         out = _gen1(md)
         lines = out.split("\n")
-        child_lines = [l for l in lines if "child" in l]
+        child_lines = [line for line in lines if "child" in line]
         assert child_lines, "child not found in output"
         # Child must have leading spaces or some indent marker
         assert child_lines[0].startswith("  "), (
@@ -439,7 +439,7 @@ class TestRoundtripWordPreservation:
 
 hypothesis = pytest.importorskip("hypothesis")
 from hypothesis import given, settings  # noqa: E402
-from hypothesis import strategies as st
+from hypothesis import strategies as st  # noqa: E402
 
 # Allowed normalisation ids — each entry is a (description, detector_fn)
 # where detector_fn(line_src, line_out) -> bool returns True if the
@@ -582,7 +582,7 @@ def _line_diff_covered(src_line: str, out_line: str,
 
 def _extract_content_lines(lines: list[str]) -> list[str]:
     """Return non-blank, non-pure-marker lines from a split line list."""
-    return [l for l in lines if l.strip()]
+    return [line for line in lines if line.strip()]
 
 
 def _check_gen1_no_content_loss(src_lines: list[str], out_lines: list[str]) -> list[str]:
@@ -1015,7 +1015,7 @@ class TestResolverMerge:
             b">>>>>>> theirs\n"
         )
 
-        def _fake_git_merge_file(O: bytes, E: bytes, D: bytes):
+        def _fake_git_merge_file(original: bytes, E: bytes, D: bytes):
             return (False, CONFLICT_BYTES)  # always conflict
 
         monkeypatch.setattr(_ss, "_git_merge_file", _fake_git_merge_file)

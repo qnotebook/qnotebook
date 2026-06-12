@@ -13,7 +13,6 @@ from qnotebook.safe_save import (
     LoadResult,
     SafeWriter,
     _apply_three_way_disjoint,
-    atomic_write,
     sha256_bytes,
 )
 
@@ -25,8 +24,8 @@ def _lr(original: bytes) -> LoadResult:
 
 def test_trivial_rung_disk_unchanged(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
-    O = b"hello\nworld\n"
-    p.write_bytes(O)
+    original = b"hello\nworld\n"
+    p.write_bytes(original)
     lr = SafeWriter.load(p)
     E = b"hello\nworld!\n"
     result = SafeWriter.save(p, E, lr, root=tmp_path)
@@ -86,8 +85,8 @@ def test_fast_save_defers_strict_preserve_subprocess(
 )
 def test_disjoint_hunks_fast_path(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
-    O = b"A\nB\nC\nD\nE\n"
-    p.write_bytes(O)
+    original = b"A\nB\nC\nD\nE\n"
+    p.write_bytes(original)
     lr = SafeWriter.load(p)
     # External: change line 1 (A -> A_ext)
     p.write_bytes(b"A_ext\nB\nC\nD\nE\n")
@@ -102,14 +101,14 @@ def test_disjoint_hunks_fast_path(tmp_path: Path) -> None:
 
 def test_overlap_escalates_beyond_disjoint(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
-    O = b"A\nB\nC\n"
-    p.write_bytes(O)
+    original = b"A\nB\nC\n"
+    p.write_bytes(original)
     lr = SafeWriter.load(p)
     # Both sides edit line B
     p.write_bytes(b"A\nB_ext\nC\n")
     E = b"A\nB_ours\nC\n"
     # Pure-python disjoint should return None
-    assert _apply_three_way_disjoint(O, E, b"A\nB_ext\nC\n") is None
+    assert _apply_three_way_disjoint(original, E, b"A\nB_ext\nC\n") is None
     result = SafeWriter.save(p, E, lr, root=tmp_path)
     # Either it's a conflict, or an external tool resolved it
     assert result.status in ("conflict", "ok")
@@ -117,28 +116,28 @@ def test_overlap_escalates_beyond_disjoint(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(not HAS_GIT_MERGE_FILE, reason="git not available")
 def test_git_merge_file_clean_on_disjoint_lines(tmp_path: Path) -> None:
-    O = b"1\n2\n3\n4\n5\n"
+    original = b"1\n2\n3\n4\n5\n"
     E = b"ours-1\n2\n3\n4\n5\n"
     D = b"1\n2\n3\n4\ntheirs-5\n"
-    clean, out = safe_save._git_merge_file(O, E, D)
+    clean, out = safe_save._git_merge_file(original, E, D)
     assert clean
     assert b"ours-1" in out and b"theirs-5" in out
 
 
 @pytest.mark.skipif(not HAS_GIT_MERGE_FILE, reason="git not available")
 def test_git_merge_file_conflict_escalates(tmp_path: Path) -> None:
-    O = b"X\n"
+    original = b"X\n"
     E = b"ours\n"
     D = b"theirs\n"
-    clean, out = safe_save._git_merge_file(O, E, D)
+    clean, out = safe_save._git_merge_file(original, E, D)
     assert not clean
     assert b"<<<<<<<" in out
 
 
 def test_whitespace_only_prefers_ours(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
-    O = b"foo\nbar\n"
-    p.write_bytes(O)
+    original = b"foo\nbar\n"
+    p.write_bytes(original)
     lr = SafeWriter.load(p)
     # External rewrites with only whitespace variations (CRLF).
     p.write_bytes(b"foo\r\nbar\r\n")
@@ -154,14 +153,14 @@ def test_roundtrip_guard_accepts_markdown(tmp_path: Path) -> None:
 
 def test_fallthrough_surfaces_conflict_bytes(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
-    O = b"same line\n"
-    p.write_bytes(O)
+    original = b"same line\n"
+    p.write_bytes(original)
     lr = SafeWriter.load(p)
     p.write_bytes(b"external change\n")
     E = b"editor change\n"
     result = SafeWriter.save(p, E, lr, root=tmp_path)
     if result.conflict:
-        assert result.base == O
+        assert result.base == original
         assert result.ours == E
         assert result.theirs == b"external change\n"
 
@@ -178,27 +177,27 @@ def test_merge_log_records_rung(tmp_path: Path) -> None:
 @pytest.mark.skipif(not HAS_WIGGLE, reason="wiggle not available")
 def test_wiggle_runs(tmp_path: Path) -> None:
     # wiggle smoke test; may or may not resolve cleanly depending on content.
-    O = b"a\nb\nc\n"
+    original = b"a\nb\nc\n"
     E = b"a\nB\nc\n"
     D = b"a\nb\nc_ext\n"
-    clean, out = safe_save._wiggle(O, E, D)
+    clean, out = safe_save._wiggle(original, E, D)
     # Just assert it returns something — behavior depends on wiggle version.
     assert isinstance(out, (bytes, bytearray))
 
 
 @pytest.mark.skipif(not HAS_MERGIRAF, reason="mergiraf not installed")
 def test_mergiraf_structural_merge(tmp_path: Path) -> None:
-    O = b"- item one\n- item two\n"
+    original = b"- item one\n- item two\n"
     E = b"- item ONE\n- item two\n"
     D = b"- item one\n- item TWO\n"
-    clean, out = safe_save._mergiraf(O, E, D, ext=".md")
+    clean, out = safe_save._mergiraf(original, E, D, ext=".md")
     assert isinstance(out, (bytes, bytearray))
 
 
 def test_noop_save_when_disk_matches_editor(tmp_path: Path) -> None:
     p = tmp_path / "n.md"
-    O = b"hello\n"
-    p.write_bytes(O)
+    original = b"hello\n"
+    p.write_bytes(original)
     lr = SafeWriter.load(p)
     # External re-writes the file with identical contents to what we'd save.
     same = b"hello\n"

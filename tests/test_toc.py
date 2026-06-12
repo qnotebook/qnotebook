@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QSettings
-from qnotebook.toc import Heading, TocDock, parse_headings
+from qnotebook.toc import TocDock, parse_headings
 from qnotebook.window import MainWindow
 
 

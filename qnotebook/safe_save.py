@@ -17,13 +17,13 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 HAS_GIT_MERGE_FILE = shutil.which("git") is not None
 HAS_WIGGLE = shutil.which("wiggle") is not None
 
 
-def _find_mergiraf() -> Optional[str]:
+def _find_mergiraf() -> str | None:
     from_path = shutil.which("mergiraf")
     if from_path:
         return from_path
@@ -53,8 +53,8 @@ def atomic_write(path: Path, data: bytes, *, retries: int = 1) -> None:
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    last_err: Optional[Exception] = None
-    for attempt in range(retries + 1):
+    last_err: Exception | None = None
+    for _attempt in range(retries + 1):
         try:
             fd, tmp_name = tempfile.mkstemp(
                 prefix=".qnotebook-tmp-", dir=str(path.parent)
@@ -106,8 +106,8 @@ def sha256_bytes(data: bytes) -> str:
 
 @dataclass
 class LoadResult:
-    original: bytes       # O — raw disk bytes at load time
-    baseline: bytes       # B — serialize(parse(O)), the editor's baseline
+    original: bytes       # original — raw disk bytes at load time
+    baseline: bytes       # B — serialize(parse(original)), the editor's baseline
     hash_original: str
 
 
@@ -117,7 +117,7 @@ class DeferredSave:
     editor_bytes: bytes
     load: LoadResult
     serialize_fn: Any = None
-    root: Optional[Path] = None
+    root: Path | None = None
     write: bool = True
     strict_preserve: bool = True
 
@@ -137,7 +137,7 @@ class SaveResult:
     ours: bytes = b""
     theirs: bytes = b""
     conflict_markers: bytes = b""
-    deferred: Optional[DeferredSave] = None
+    deferred: DeferredSave | None = None
 
     @property
     def ok(self) -> bool:
@@ -191,10 +191,10 @@ def _ranges_disjoint(hunks_a: list[tuple[int, int, int, int]],
     return True
 
 
-def _apply_three_way_disjoint(O: bytes, E: bytes, D: bytes) -> Optional[bytes]:
-    """If O->E and O->D hunks are line-disjoint, produce union by picking
-    the non-O side at each line. Returns None if not disjoint."""
-    o_lines = _split_lines(O)
+def _apply_three_way_disjoint(original: bytes, E: bytes, D: bytes) -> bytes | None:
+    """If original->E and original->D hunks are line-disjoint, produce union by picking
+    the non-original side at each line. Returns None if not disjoint."""
+    o_lines = _split_lines(original)
     e_lines = _split_lines(E)
     d_lines = _split_lines(D)
 
@@ -204,8 +204,8 @@ def _apply_three_way_disjoint(O: bytes, E: bytes, D: bytes) -> Optional[bytes]:
     if not _ranges_disjoint(oe_hunks, od_hunks):
         return None
 
-    # Walk O line-by-line, taking E's substitution if this line is in an OE
-    # hunk, D's if in an OD hunk, else O's line. Merge replacements by range.
+    # Walk original line-by-line, taking E's substitution if this line is in an OE
+    # hunk, D's if in an OD hunk, else original's line. Merge replacements by range.
     result: list[bytes] = []
     i = 0
     n = len(o_lines)
@@ -253,8 +253,8 @@ def _apply_three_way_disjoint(O: bytes, E: bytes, D: bytes) -> Optional[bytes]:
 # ------------------------------------------------------------------
 
 
-def _git_merge_file(O: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
-    """Run ``git merge-file -p --diff3 E O D``.
+def _git_merge_file(original: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
+    """Run ``git merge-file -p --diff3 E original D``.
 
     Returns (clean, output). ``clean`` is True iff merge returned 0 (no
     conflicts). Output is the merged bytes (with conflict markers if not
@@ -264,7 +264,7 @@ def _git_merge_file(O: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         (tdp / "ours").write_bytes(E)
-        (tdp / "base").write_bytes(O)
+        (tdp / "base").write_bytes(original)
         (tdp / "theirs").write_bytes(D)
         res = subprocess.run(
             ["git", "merge-file", "-p", "--diff3",
@@ -276,8 +276,8 @@ def _git_merge_file(O: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
     return clean, res.stdout
 
 
-def _wiggle(O: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
-    """Try to apply the O->E patch onto D with wiggle -r.
+def _wiggle(original: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
+    """Try to apply the original->E patch onto D with wiggle -r.
 
     Returns (clean, output). clean means wiggle rewrote with no unresolved."""
     if not HAS_WIGGLE:
@@ -287,10 +287,10 @@ def _wiggle(O: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
         target = tdp / "target"
         target.write_bytes(D)
         base = tdp / "base"
-        base.write_bytes(O)
+        base.write_bytes(original)
         new = tdp / "new"
         new.write_bytes(E)
-        # Generate diff from O -> E, apply onto D with wiggle
+        # Generate diff from original -> E, apply onto D with wiggle
         diff = subprocess.run(
             ["diff", "-u", str(base), str(new)], capture_output=True
         )
@@ -307,8 +307,8 @@ def _wiggle(O: bytes, E: bytes, D: bytes) -> tuple[bool, bytes]:
     return False, merged
 
 
-def _mergiraf(O: bytes, E: bytes, D: bytes, ext: str = ".md") -> tuple[bool, bytes]:
-    """Run mergiraf on (E, O, D). Returns (clean, output)."""
+def _mergiraf(original: bytes, E: bytes, D: bytes, ext: str = ".md") -> tuple[bool, bytes]:
+    """Run mergiraf on (E, original, D). Returns (clean, output)."""
     if not HAS_MERGIRAF:
         return False, b""
     with tempfile.TemporaryDirectory() as td:
@@ -317,7 +317,7 @@ def _mergiraf(O: bytes, E: bytes, D: bytes, ext: str = ".md") -> tuple[bool, byt
         base = tdp / ("base" + ext)
         theirs = tdp / ("theirs" + ext)
         ours.write_bytes(E)
-        base.write_bytes(O)
+        base.write_bytes(original)
         theirs.write_bytes(D)
         res = subprocess.run(
             [MERGIRAF_PATH, "merge",
@@ -385,7 +385,7 @@ def _roundtrip_parses(data: bytes) -> bool:
 # ------------------------------------------------------------------
 
 
-def _log_rung(root: Optional[Path], path: Path, rung: str) -> None:
+def _log_rung(root: Path | None, path: Path, rung: str) -> None:
     if root is None:
         return
     log_dir = root / ".qnotebook"
@@ -455,7 +455,7 @@ class SafeWriter:
         load: LoadResult,
         serialize_fn=None,
         *,
-        root: Optional[Path] = None,
+        root: Path | None = None,
         write: bool = True,
         strict_preserve: bool = True,
         allow_subprocess: bool = True,
@@ -463,7 +463,7 @@ class SafeWriter:
         path = Path(path)
         if isinstance(E, str):
             E = E.encode("utf-8")
-        O = load.original
+        original = load.original
         deferred = DeferredSave(
             path=path,
             editor_bytes=E,
@@ -513,7 +513,7 @@ class SafeWriter:
             return SaveResult(status="ok", bytes=E, rung="noop-match")
 
         # ---- rung (b): disjoint-hunks fast path
-        merged = _apply_three_way_disjoint(O, E, D)
+        merged = _apply_three_way_disjoint(original, E, D)
         if merged is not None and _roundtrip_parses(merged):
             if write:
                 atomic_write(path, merged)
@@ -526,7 +526,7 @@ class SafeWriter:
             return SaveResult(
                 status="needs_merge",
                 reason="external-merge",
-                base=O,
+                base=original,
                 ours=E,
                 theirs=D,
                 deferred=deferred,
@@ -534,7 +534,7 @@ class SafeWriter:
 
         # ---- rung (c): git merge-file
         if HAS_GIT_MERGE_FILE:
-            clean, out = _git_merge_file(O, E, D)
+            clean, out = _git_merge_file(original, E, D)
             if clean and _roundtrip_parses(out):
                 if write:
                     atomic_write(path, out)
@@ -546,7 +546,7 @@ class SafeWriter:
 
         # ---- rung (d): wiggle fuzzy patch
         if HAS_WIGGLE:
-            clean, out = _wiggle(O, E, D)
+            clean, out = _wiggle(original, E, D)
             if clean and out and _roundtrip_parses(out):
                 if write:
                     atomic_write(path, out)
@@ -555,7 +555,7 @@ class SafeWriter:
 
         # ---- rung (e): mergiraf structural merge
         if HAS_MERGIRAF:
-            clean, out = _mergiraf(O, E, D, ext=path.suffix or ".md")
+            clean, out = _mergiraf(original, E, D, ext=path.suffix or ".md")
             if clean and out and _roundtrip_parses(out):
                 if write:
                     atomic_write(path, out)
@@ -578,7 +578,7 @@ class SafeWriter:
         _log_rung(root, path, "conflict")
         return SaveResult(
             status="conflict",
-            base=O,
+            base=original,
             ours=E,
             theirs=D,
             rung="conflict",

@@ -13,7 +13,6 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from . import safe_save
 
@@ -49,7 +48,7 @@ class Snapshot:
         return self.snap_path.read_bytes()
 
 
-def take_snapshot(root: Path, page_path: Path) -> Optional[Snapshot]:
+def take_snapshot(root: Path, page_path: Path) -> Snapshot | None:
     """Archive the current on-disk bytes of ``page_path``. No-op if missing."""
     if not page_path.is_file():
         return None

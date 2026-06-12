@@ -23,7 +23,6 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 # ----- Notebook registry (QSettings-backed) -----
 
@@ -73,11 +72,11 @@ def cmd_search(notebook: str, query: str, fmt: str = "grep") -> int:
                 results.append((path, i, line))
     if fmt == "json":
         print(json.dumps([
-            {"path": p, "line": l, "text": t} for (p, l, t) in results
+            {"path": p, "line": line_no, "text": t} for (p, line_no, t) in results
         ]))
     else:
-        for p, l, t in results:
-            print(f"{p}:{l}:{t}")
+        for p, line_no, t in results:
+            print(f"{p}:{line_no}:{t}")
     return 0
 
 
@@ -129,8 +128,8 @@ def cmd_index_rebuild(notebook: str) -> int:
 
 
 def cmd_new_page(notebook: str, page: str, *,
-                 template: Optional[str] = None,
-                 content: Optional[str] = None,
+                 template: str | None = None,
+                 content: str | None = None,
                  stdin: bool = False) -> int:
     nb = _notebook(notebook)
     if nb.exists(page):
@@ -155,9 +154,8 @@ def cmd_new_page(notebook: str, page: str, *,
 
 def cmd_append(notebook: str, page: str, text: str, *,
                bullet: bool = False, timestamp: bool = False,
-               heading: Optional[str] = None, stdin: bool = False,
-               link: Optional[str] = None) -> int:
-    from . import safe_save
+               heading: str | None = None, stdin: bool = False,
+               link: str | None = None) -> int:
     nb = _notebook(notebook)
     if stdin:
         text = sys.stdin.read().rstrip("\n")
@@ -203,7 +201,7 @@ def _forward_reload(root: Path, page: str) -> None:
         pass
 
 
-def _append_to_body(body: str, line: str, *, heading: Optional[str] = None) -> str:
+def _append_to_body(body: str, line: str, *, heading: str | None = None) -> str:
     """Append ``line`` to ``body``. If ``heading`` given, append under that
     heading; create the heading if missing."""
     if heading is None:

@@ -125,7 +125,6 @@ def _make_png(path):
 
 
 def test_insert_image_via_api(qapp, tmp_path):
-    from pathlib import Path
     page_dir = tmp_path
     resdir = page_dir / "_resources"
     resdir.mkdir()
@@ -188,7 +187,6 @@ def test_pygments_highlighting_colors_code(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("```python\ndef foo(x):\n    return x\n```\n")
     # Walk the document and look for any fragment with a non-default foreground
-    from PyQt6.QtGui import QColor
     doc = ed.document()
     b = doc.firstBlock()
     found_color = False
@@ -217,7 +215,7 @@ def test_file_drop_emits_file_dropped(qapp, tmp_path):
     ed.fileDropped.connect(lambda p: got_file.append(p))
     ed.imageDropped.connect(lambda p: got_image.append(p))
     # Build a drop event with a local pdf url
-    from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
+    from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
     from PyQt6.QtGui import QDropEvent
     mock_file = tmp_path / "report.pdf"
     mock_file.write_bytes(b"%PDF-1.4\n")
@@ -361,7 +359,6 @@ def test_completer_detects_wikilink_prefix(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_completion_sources(["Home", "Other", "Sub:Child"], [])
-    from PyQt6.QtGui import QTextCursor
     cur = ed.textCursor()
     cur.insertText("See [[Ho")
     info = ed._active_prefix()
@@ -376,7 +373,6 @@ def test_completer_detects_tag_prefix(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_completion_sources([], ["todo", "urgent", "review"])
-    from PyQt6.QtGui import QTextCursor
     cur = ed.textCursor()
     cur.insertText("foo #tod")
     info = ed._active_prefix()
@@ -391,7 +387,6 @@ def test_completer_wikilink_activation_inserts_closing_brackets(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_completion_sources(["Home", "Other"], [])
-    from PyQt6.QtGui import QTextCursor
     cur = ed.textCursor()
     cur.insertText("See [[Ot")
     # Simulate activation
@@ -406,7 +401,6 @@ def test_completer_inactive_outside_brackets(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_completion_sources(["Home"], [])
-    from PyQt6.QtGui import QTextCursor
     cur = ed.textCursor()
     cur.insertText("just plain text")
     assert ed._active_prefix() is None
@@ -420,7 +414,6 @@ def test_live_reparse_makes_bold(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_live_reparse_enabled(True)
-    from PyQt6.QtGui import QTextCursor
     cur = ed.textCursor()
     cur.insertText("this is **bold** text")
     ed.live_reparse_now()
@@ -449,7 +442,6 @@ def test_live_reparse_preserves_cursor_position(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_live_reparse_enabled(True)
-    from PyQt6.QtGui import QTextCursor
     cur = ed.textCursor()
     cur.insertText("alpha _italic_ beta")
     # Place cursor at a known position
@@ -465,7 +457,6 @@ def test_live_reparse_wikilink_gets_anchor(qapp):
     ed = MarkdownEditor()
     ed.load_markdown("")
     ed.set_live_reparse_enabled(True)
-    from PyQt6.QtGui import QTextCursor
     from qnotebook.md_to_qdoc import CHAR_WIKILINK
     cur = ed.textCursor()
     cur.insertText("see [[Target]] now")
@@ -607,9 +598,12 @@ def test_transclusion_infinite_loop_guarded(qapp):
     from PyQt6.QtGui import QTextDocument
     from qnotebook.md_to_qdoc import markdown_to_qdoc
 
-    def resolver(target: str, _calls=[0]) -> str | None:
-        _calls[0] += 1
-        if _calls[0] > 5:
+    calls = 0
+
+    def resolver(target: str) -> str | None:
+        nonlocal calls
+        calls += 1
+        if calls > 5:
             raise AssertionError("infinite loop")
         return None
 
@@ -633,7 +627,7 @@ def test_transclusion_no_resolver_still_serializes(qapp):
 
 def test_toc_marker_generates_heading_list(qapp):
     from PyQt6.QtGui import QTextDocument
-    from qnotebook.md_to_qdoc import BLOCK_TRANSCLUDED_CHILD, CHAR_WIKILINK, markdown_to_qdoc
+    from qnotebook.md_to_qdoc import BLOCK_TRANSCLUDED_CHILD, markdown_to_qdoc
     doc = QTextDocument()
     markdown_to_qdoc("# A\n\n[[!TOC]]\n\n## B\n\n## C\n", doc)
     # TOC expanded to 3 child blocks (A, B, C).
@@ -647,7 +641,7 @@ def test_toc_marker_generates_heading_list(qapp):
 
 
 def test_toc_marker_heading_anchors_target_same_page(qapp):
-    from PyQt6.QtGui import QTextCursor, QTextDocument
+    from PyQt6.QtGui import QTextDocument
     from qnotebook.md_to_qdoc import CHAR_WIKILINK, markdown_to_qdoc
     doc = QTextDocument()
     markdown_to_qdoc("# Top\n\n[[!TOC]]\n\n## Sub\n", doc)

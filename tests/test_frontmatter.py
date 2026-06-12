@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from qnotebook import frontmatter as fm
 from qnotebook.index import Index
 from qnotebook.notebook import Notebook

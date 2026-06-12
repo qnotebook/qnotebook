@@ -7,9 +7,7 @@ skipped cleanly by the UI.
 from __future__ import annotations
 
 import re
-from typing import Iterable
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import (
     QColor,
     QSyntaxHighlighter,

@@ -101,7 +101,6 @@ def restore(window, data: dict[str, Any]) -> None:
 
 
 def _set_cursor_pos(editor, pos: int) -> None:
-    from PyQt6.QtGui import QTextCursor
     cur = editor.textCursor()
     doc_len = editor.document().characterCount()
     if 0 <= pos < doc_len:
@@ -116,6 +115,6 @@ def _set_dock(dock, visible: bool) -> None:
         dock.hide()
 
 
-from PyQt6.QtCore import Qt as _Qt
+from PyQt6.QtCore import Qt as _Qt  # noqa: E402
 
 _H_ORIENT_VALUE = _Qt.Orientation.Horizontal.value

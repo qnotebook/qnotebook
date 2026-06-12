@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QSettings
-from qnotebook.journal import CalendarDock, journal_page_for_date
+from qnotebook.journal import journal_page_for_date
 from qnotebook.window import MainWindow
 
 

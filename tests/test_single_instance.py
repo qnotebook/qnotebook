@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
-import pytest
 from qnotebook import single_instance
 
 
@@ -28,7 +26,6 @@ def test_try_forward_returns_false_when_no_server(tmp_path: Path) -> None:
 
 
 def test_command_server_round_trip(qapp, tmp_path: Path, qtbot) -> None:
-    from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 
     class FakeWindow:
         _current_page = None

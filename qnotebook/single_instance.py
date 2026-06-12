@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Optional
 
 
 def server_name(notebook_root: Path) -> str:
@@ -52,8 +51,7 @@ class CommandServer:
     """
 
     def __init__(self, window) -> None:
-        from PyQt6.QtCore import QObject, pyqtSignal
-        from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+        from PyQt6.QtNetwork import QLocalServer
         self._window = window
         self._server: QLocalServer | None = None
         self._name: str = ""

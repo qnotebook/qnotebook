@@ -84,7 +84,7 @@ class CommandPalette(QDialog):
             ranked = rank(query, self._labels)
         else:
             ranked = [(0, lbl) for lbl in self._labels]
-        by_label = {lbl: a for lbl, a in zip(self._labels, self._actions)}
+        by_label = {lbl: a for lbl, a in zip(self._labels, self._actions, strict=True)}
         for _score, lbl in ranked[:300]:
             item = QListWidgetItem(lbl)
             self.list.addItem(item)

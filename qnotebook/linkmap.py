@@ -7,9 +7,9 @@ Forward links + backlinks (backlinks rendered with a dashed pen).
 from __future__ import annotations
 
 import math
-from typing import Callable
+from collections.abc import Callable
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtCore import QPointF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 from PyQt6.QtWidgets import (
     QGraphicsEllipseItem,

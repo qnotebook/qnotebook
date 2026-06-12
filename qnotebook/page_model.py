@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QAbstractItemModel, QMimeData, QModelIndex, Qt, pyqtSignal
@@ -10,12 +9,13 @@ from PyQt6.QtCore import QAbstractItemModel, QMimeData, QModelIndex, Qt, pyqtSig
 from .notebook import Notebook, PageRef
 
 PAGE_MIME_TYPE = "application/x-qnotebook-page-path"
+INVALID_INDEX = QModelIndex()
 
 
 class _Node:
     __slots__ = ("page", "parent", "children", "loaded")
 
-    def __init__(self, page: PageRef | None, parent: "_Node | None") -> None:
+    def __init__(self, page: PageRef | None, parent: _Node | None) -> None:
         self.page = page  # None for root
         self.parent = parent
         self.children: list[_Node] = []
@@ -76,15 +76,15 @@ class PageTreeModel(QAbstractItemModel):
 
     # ---- QAbstractItemModel ----
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(self, parent: QModelIndex = INVALID_INDEX) -> int:
         node = self._node(parent)
         self._load(node)
         return len(node.children)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(self, parent: QModelIndex = INVALID_INDEX) -> int:
         return 1
 
-    def index(self, row: int, column: int, parent: QModelIndex = QModelIndex()) -> QModelIndex:
+    def index(self, row: int, column: int, parent: QModelIndex = INVALID_INDEX) -> QModelIndex:
         if column != 0:
             return QModelIndex()
         node = self._node(parent)
@@ -106,7 +106,7 @@ class PageTreeModel(QAbstractItemModel):
         row = gp.children.index(p)
         return self.createIndex(row, 0, p)
 
-    def hasChildren(self, parent: QModelIndex = QModelIndex()) -> bool:
+    def hasChildren(self, parent: QModelIndex = INVALID_INDEX) -> bool:
         node = self._node(parent)
         if not node.loaded:
             # Fast path: avoid loading full subtree

@@ -32,7 +32,7 @@ def test_collect_actions_non_empty(win):
     assert len(actions) > 5
     # Should include Save:
     labels = [a.text().replace("&", "") for a in actions]
-    assert any("Save" in l for l in labels)
+    assert any("Save" in label for label in labels)
 
 
 def test_command_palette_filters_by_query(win, qtbot):

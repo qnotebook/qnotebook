@@ -219,8 +219,7 @@ def test_inbox_is_bounded_under_flood(qapp):
             flood["n"] += 1
             qi._deliver_to_page(window, "text/plain", "x" * 10)
             assert len(window._qdistro_inbox) <= qi.MAX_PENDING_DROPS, (
-                "inbox grew past MAX_PENDING_DROPS under flood: %d"
-                % len(window._qdistro_inbox))
+                f"inbox grew past MAX_PENDING_DROPS under flood: {len(window._qdistro_inbox)}")
         return False  # decline this one; pump drains the rest as declines
 
     import qnotebook.qdistro_integration as _qi
@@ -290,8 +289,7 @@ def test_dialogs_are_serialized(qapp):
         _qi._confirm_drop = orig
 
     assert depth["max"] == 1, (
-        "confirmation dialog was re-entered (max concurrent depth %d > 1)"
-        % depth["max"])
+        f"confirmation dialog was re-entered (max concurrent depth {depth['max']} > 1)")
     w.close()
 
 

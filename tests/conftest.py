@@ -99,7 +99,7 @@ def pytest_runtest_makereport(item, call):
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 
 @pytest.fixture(scope="session")

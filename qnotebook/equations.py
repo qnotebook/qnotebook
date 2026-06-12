@@ -13,7 +13,6 @@ import re
 from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import (
     QColor,
-    QFont,
     QImage,
     QTextCharFormat,
     QTextCursor,
@@ -28,7 +27,6 @@ except Exception:  # pragma: no cover - exercised when matplotlib missing
     HAS_MATHTEXT = False
 
 
-from .md_to_qdoc import CHAR_IMAGE_ALT  # reuse alt slot is wrong; use dedicated below
 
 # Use a dedicated property slot so we don't collide with image alt.
 EQ_LATEX = QTextCharFormat.Property.UserProperty + 20  # str: original LaTeX (no $ delimiters)
@@ -46,7 +44,6 @@ def render_latex_png(latex: str, fontsize: int = 14) -> bytes | None:
     try:
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         from matplotlib.figure import Figure
-        from matplotlib.mathtext import MathTextParser
         fig = Figure(figsize=(0.01, 0.01))
         canvas = FigureCanvasAgg(fig)
         fig.text(0, 0, f"${latex}$", fontsize=fontsize)

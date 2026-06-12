@@ -89,7 +89,7 @@ def _unique_path(desired: Path) -> Path:
 class FindBar(QWidget):
     """Inline find-in-page bar. Hidden by default; Ctrl+F toggles."""
 
-    def __init__(self, editor: "MarkdownEditor", parent: QWidget | None = None) -> None:
+    def __init__(self, editor: MarkdownEditor, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.editor = editor
         layout = QHBoxLayout(self)
@@ -345,10 +345,10 @@ class TagsDock(QWidget):
             self._on_tag_clicked(tag)
 
 
-from .history import NavigationHistory
-from .index import Index
-from .notebook import Notebook
-from .page_model import PageTreeModel
+from .history import NavigationHistory  # noqa: E402
+from .index import Index  # noqa: E402
+from .notebook import Notebook  # noqa: E402
+from .page_model import PageTreeModel  # noqa: E402
 
 
 class _SaveMergeSignals(QObject):
@@ -1568,7 +1568,9 @@ class MainWindow(QMainWindow):
             return None
         idx = self.index
 
-        def resolve(target: str, _seen: set[str] = set()) -> str | None:
+        def resolve(target: str, _seen: set[str] | None = None) -> str | None:
+            if _seen is None:
+                _seen = set()
             page_part, heading = (target.split("#", 1) + [""])[:2] if "#" in target else (target, "")
             page = page_part.replace("/", ":").strip(":")
             if not page or page == origin_page or page in _seen:
@@ -1732,7 +1734,7 @@ class MainWindow(QMainWindow):
         elif chosen is act_delete and ref:
             self._delete_page_dialog(ref.path)
 
-    def _new_child_page(self, parent: "PageRef | None") -> None:
+    def _new_child_page(self, parent: PageRef | None) -> None:
         if self.notebook is None:
             return
         prefix = (parent.path + ":") if parent else ""

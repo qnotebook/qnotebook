@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from qnotebook import nb_settings, safe_save
+from qnotebook import nb_settings
 from qnotebook.notebook import Notebook
 from qnotebook.safe_save import LoadResult, SafeWriter, sha256_bytes
 

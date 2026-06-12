@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
-from typing import Callable
 
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate
 from PyQt6.QtGui import QFont, QTextCharFormat
 from PyQt6.QtWidgets import QCalendarWidget, QVBoxLayout, QWidget
 

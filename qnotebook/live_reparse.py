@@ -8,9 +8,7 @@ through the full markdown parser, so it stays fast on every keystroke.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from PyQt6.QtCore import QObject, Qt, QTimer
+from PyQt6.QtCore import QObject, QTimer
 from PyQt6.QtGui import QColor, QFont, QTextBlock, QTextCharFormat, QTextCursor
 
 from .md_to_qdoc import (

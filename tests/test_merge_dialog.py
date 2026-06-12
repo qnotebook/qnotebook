@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from qnotebook.merge_dialog import (
     MergeDialog,
     apply_choices,

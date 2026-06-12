@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from . import safe_save
 from .sync_conflict import ConflictFile
@@ -44,8 +44,8 @@ class ResolverActions:
 
     @staticmethod
     def merge(cf: ConflictFile, root: Path,
-              resolve: Optional[Callable[[bytes, bytes, bytes], bytes]] = None
-              ) -> Optional[safe_save.SaveResult]:
+              resolve: Callable[[bytes, bytes, bytes], bytes] | None = None
+              ) -> safe_save.SaveResult | None:
         """Attempt a 3-way merge.
 
         Base = original bytes (best guess — we don't have the true common

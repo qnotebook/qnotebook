@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from pathlib import Path
-from typing import Iterable
 
 from . import frontmatter as _fm
-from .notebook import DOTDIR, Notebook, PageRef
+from .notebook import DOTDIR, Notebook
 
 WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 

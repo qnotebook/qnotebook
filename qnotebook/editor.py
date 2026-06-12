@@ -10,11 +10,8 @@ from PyQt6.QtGui import (
     QFont,
     QImage,
     QMouseEvent,
-    QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
-    QTextDocument,
-    QTextFormat,
     QTextImageFormat,
 )
 from PyQt6.QtWidgets import QCompleter, QTextEdit

@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSignal
 

@@ -7,12 +7,10 @@ what we're checking, not throughput.
 
 from __future__ import annotations
 
-import random
 import threading
 import time
 from pathlib import Path
 
-from qnotebook import safe_save
 from qnotebook.safe_save import SafeWriter, atomic_write
 
 

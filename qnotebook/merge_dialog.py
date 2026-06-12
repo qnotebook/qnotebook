@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass
-from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (

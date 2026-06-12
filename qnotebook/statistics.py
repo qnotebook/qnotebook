@@ -7,7 +7,6 @@ non-UI callers) can consume it without spinning up a QDialog.
 from __future__ import annotations
 
 import datetime as _dt
-from pathlib import Path
 from typing import Any
 
 
@@ -96,7 +95,6 @@ def show_dashboard(parent, notebook, index) -> None:
         QDialogButtonBox,
         QGraphicsScene,
         QGraphicsView,
-        QHBoxLayout,
         QLabel,
         QListWidget,
         QTabWidget,

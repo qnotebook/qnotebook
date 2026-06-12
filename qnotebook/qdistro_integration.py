@@ -52,7 +52,6 @@ import datetime
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
@@ -147,7 +146,7 @@ def _status(window, msg: str, timeout_ms: int = 6000) -> None:
     print(f"[qnotebook/qdistro] {msg}", flush=True)
 
 
-def maybe_install(window) -> Optional[object]:
+def maybe_install(window) -> object | None:
     if _app_receiver is None:
         print("[qnotebook/qdistro] qdistro_app SDK not importable; "
               "App1 registration skipped",
@@ -204,7 +203,7 @@ def _deliver_to_page(window, kind: str, payload: str) -> None:
     return drop
 
 
-def _confirm_drop(window, drop: "StagedDrop") -> bool:
+def _confirm_drop(window, drop: StagedDrop) -> bool:
     """Ask the user whether to append the staged drop. Overridable in
     tests / headless runs by setting ``window._qdistro_autoconfirm`` to
     True/False to skip the modal dialog."""
@@ -237,7 +236,7 @@ def _inbox(window) -> list:
     return inbox
 
 
-def _stage_for_confirmation(window, drop: "StagedDrop") -> None:
+def _stage_for_confirmation(window, drop: StagedDrop) -> None:
     """Enqueue the drop in a **bounded** inbox and kick the serialized
     confirmation pump.
 
@@ -315,7 +314,7 @@ def _pump_inbox(window) -> None:
                     f"{drop.kind} drop (declined)")
 
 
-def _append_confirmed(window, drop: "StagedDrop") -> None:
+def _append_confirmed(window, drop: StagedDrop) -> None:
     """Append a user-confirmed drop to the active page. Only reached
     after :func:`_confirm_drop` returns True."""
     text = drop.header() + drop.payload

@@ -7,9 +7,9 @@ Page paths use `:` as the separator in the API (e.g. `Foo:Bar`). On disk,
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 from . import safe_save
 from . import snapshots as _snapshots
@@ -62,7 +62,7 @@ class PageRef:
         return self.path.rsplit(":", 1)[-1]
 
     @property
-    def parent(self) -> "PageRef | None":
+    def parent(self) -> PageRef | None:
         if ":" not in self.path:
             return None
         return PageRef(self.path.rsplit(":", 1)[0])
@@ -157,10 +157,10 @@ class Notebook:
         return f.read_text(encoding="utf-8")
 
     def save_page(self, page: str, md_text: str,
-                  load_result: "safe_save.LoadResult | None" = None,
+                  load_result: safe_save.LoadResult | None = None,
                   *,
                   allow_subprocess: bool = True,
-                  ) -> "safe_save.SaveResult":
+                  ) -> safe_save.SaveResult:
         """Atomic save via SafeWriter (same-dir tempfile + fsync + merge ladder
         when ``load_result`` is supplied). Takes a pre-save snapshot of the
         current on-disk bytes so recent states are recoverable from
@@ -183,13 +183,13 @@ class Notebook:
             allow_subprocess=allow_subprocess,
         )
 
-    def load_for_save(self, page: str) -> "safe_save.LoadResult":
+    def load_for_save(self, page: str) -> safe_save.LoadResult:
         return safe_save.SafeWriter.load(self.file_for(page))
 
-    def snapshots(self, page: str) -> list["_snapshots.Snapshot"]:
+    def snapshots(self, page: str) -> list[_snapshots.Snapshot]:
         return _snapshots.list_snapshots(self.root, self.file_for(page))
 
-    def restore_snapshot(self, snap: "_snapshots.Snapshot") -> None:
+    def restore_snapshot(self, snap: _snapshots.Snapshot) -> None:
         _snapshots.restore(self.root, snap)
 
     def create_page(self, page: str, initial: str = "") -> PageRef:

@@ -8,14 +8,13 @@ installed.
 from __future__ import annotations
 
 import string
-from pathlib import Path
 
 import pytest
 
 hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import given, settings
-from hypothesis import strategies as st
-from qnotebook.safe_save import SafeWriter
+from hypothesis import given, settings  # noqa: E402
+from hypothesis import strategies as st  # noqa: E402
+from qnotebook.safe_save import SafeWriter  # noqa: E402
 
 
 def _md_line():
