@@ -686,7 +686,7 @@ def test_hypothesis_gen1_mutation_in_allow_list(qapp, lines):
     violations = _check_gen1_no_content_loss(md.split("\n"), out.split("\n"))
 
     assert not violations, (
-        f"Content lost without allow-list coverage in gen-1:\n"
+        "Content lost without allow-list coverage in gen-1:\n"
         + "\n".join(violations[:5])
     )
 
