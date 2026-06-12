@@ -12,7 +12,6 @@ import mistune
 
 from .notebook import Notebook, page_to_relpath
 
-
 DEFAULT_CSS = """\
 body {
     font-family: Georgia, 'Times New Roman', serif;
@@ -247,8 +246,8 @@ def _copy_resources(notebook: Notebook, page: str, out_dir: Path, out_page_dir: 
 
 def export_page_pdf(notebook: Notebook, page: str, out_path: Path | str) -> Path:
     """Render the page to a styled QTextDocument and write PDF via QPdfWriter."""
-    from PyQt6.QtGui import QPageLayout, QPageSize, QTextDocument, QPdfWriter
     from PyQt6.QtCore import QMarginsF, QSizeF
+    from PyQt6.QtGui import QPageLayout, QPageSize, QPdfWriter, QTextDocument
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

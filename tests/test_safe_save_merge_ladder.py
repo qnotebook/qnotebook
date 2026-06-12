@@ -5,13 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from qnotebook.safe_save import (
+    HAS_GIT_MERGE_FILE,
+    HAS_MERGIRAF,
+    HAS_WIGGLE,
+    LoadResult,
+    SafeWriter,
+    _apply_three_way_disjoint,
+    atomic_write,
+    sha256_bytes,
+)
 
 from qnotebook import safe_save
-from qnotebook.safe_save import (
-    HAS_GIT_MERGE_FILE, HAS_MERGIRAF, HAS_WIGGLE,
-    LoadResult, SafeWriter, atomic_write, sha256_bytes,
-    _apply_three_way_disjoint,
-)
 
 
 def _lr(original: bytes) -> LoadResult:

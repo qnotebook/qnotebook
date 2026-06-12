@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QUrl, QMimeData
+from PyQt6.QtCore import QMimeData, QStringListModel, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QFont,
     QImage,
@@ -14,11 +14,10 @@ from PyQt6.QtGui import (
     QTextCharFormat,
     QTextCursor,
     QTextDocument,
-    QTextImageFormat,
     QTextFormat,
+    QTextImageFormat,
 )
 from PyQt6.QtWidgets import QCompleter, QTextEdit
-from PyQt6.QtCore import QStringListModel
 
 from .md_to_qdoc import (
     BLOCK_KIND,
@@ -336,7 +335,7 @@ class MarkdownEditor(QTextEdit):
         cur = self.cursorForPosition(pos)
         cfmt = cur.charFormat()
         # Footnote reference click: scroll to the matching definition block.
-        from .md_to_qdoc import CHAR_FOOTNOTE_REF, BLOCK_FOOTNOTE_DEF
+        from .md_to_qdoc import BLOCK_FOOTNOTE_DEF, CHAR_FOOTNOTE_REF
         fn_ref = cfmt.property(CHAR_FOOTNOTE_REF)
         if fn_ref:
             doc = self.document()

@@ -17,7 +17,6 @@ from PyQt6.QtGui import (
     QTextDocument,
 )
 
-
 try:
     import enchant  # type: ignore
     HAS_ENCHANT = True

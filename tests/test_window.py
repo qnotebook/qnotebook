@@ -4,9 +4,7 @@ import threading
 from pathlib import Path
 
 import pytest
-
 from PyQt6.QtCore import QSettings
-
 from qnotebook.window import MainWindow
 
 
@@ -162,6 +160,7 @@ def test_save_merge_ladder_runs_off_gui_thread(win, tmp_notebook: Path,
                                                qapp, qtbot, monkeypatch):
     from PyQt6.QtCore import QThread
     from PyQt6.QtGui import QTextCursor
+
     from qnotebook import safe_save
 
     win.load_page("Home")
@@ -203,6 +202,7 @@ def test_save_changed_during_async_merge_preserves_external_edits(
     win, tmp_notebook: Path, qapp, qtbot, monkeypatch,
 ):
     from PyQt6.QtGui import QTextCursor
+
     from qnotebook import safe_save
 
     win.load_page("Home")
@@ -256,6 +256,7 @@ def test_save_changed_during_async_merge_preserves_external_edits(
 
 def test_close_event_drains_pending_merges_before_commits(win, monkeypatch):
     from PyQt6.QtGui import QCloseEvent
+
     from qnotebook import versioning
 
     calls = []

@@ -31,7 +31,6 @@ import sys
 
 import pytest
 
-
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 PyQt6 = pytest.importorskip("PyQt6", reason="PyQt6 not installed")

@@ -23,7 +23,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 _HEADING_RE = re.compile(r"^(=+)\s+(.+?)\s+=+$")
 _ITALIC_RE = re.compile(r"//([^/\n]+?)//")
 _UNDERLINE_RE = re.compile(r"__([^_\n]+?)__")

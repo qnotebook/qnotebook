@@ -77,12 +77,9 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-
 from PyQt6.QtGui import QTextDocument
-
 from qnotebook.md_to_qdoc import markdown_to_qdoc
 from qnotebook.qdoc_to_md import qdoc_to_markdown
-
 
 # ---------------------------------------------------------------------------
 # Helper: single round-trip (gen-1)
@@ -441,7 +438,8 @@ class TestRoundtripWordPreservation:
 
 
 hypothesis = pytest.importorskip("hypothesis")
-from hypothesis import given, settings, strategies as st  # noqa: E402
+from hypothesis import given, settings  # noqa: E402
+from hypothesis import strategies as st
 
 # Allowed normalisation ids — each entry is a (description, detector_fn)
 # where detector_fn(line_src, line_out) -> bool returns True if the
@@ -697,11 +695,11 @@ def test_hypothesis_gen1_mutation_in_allow_list(qapp, lines):
 
 
 from qnotebook.sync_conflict import (  # noqa: E402
+    CONFLICT_RE,
     ConflictFile,
     ConflictWatcher,
     parse_conflict_name,
     scan,
-    CONFLICT_RE,
 )
 
 

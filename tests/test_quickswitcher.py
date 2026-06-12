@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from PyQt6.QtCore import QSettings
-
 from qnotebook.quickswitcher import QuickSwitcher, fuzzy_score, rank
 from qnotebook.window import MainWindow
 

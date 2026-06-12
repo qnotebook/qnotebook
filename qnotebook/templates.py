@@ -16,7 +16,6 @@ from pathlib import Path
 
 from .notebook import DOTDIR, Notebook
 
-
 TEMPLATES_SUBDIR = "templates"
 BUILTIN_DIR = Path(__file__).parent / "builtin_templates"
 

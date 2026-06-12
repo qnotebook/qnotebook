@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from qnotebook.index import Index, rewrite_wikilinks
 from qnotebook.notebook import (
     Notebook,

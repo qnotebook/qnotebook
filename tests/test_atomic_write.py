@@ -7,10 +7,10 @@ import time
 from pathlib import Path
 
 import pytest
-
-from qnotebook import safe_save
 from qnotebook.notebook import Notebook
 from qnotebook.safe_save import atomic_write, detect_sync_conflict_siblings
+
+from qnotebook import safe_save
 
 
 def test_atomic_write_creates_file(tmp_path: Path) -> None:

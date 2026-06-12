@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-
 HAS_GIT_MERGE_FILE = shutil.which("git") is not None
 HAS_WIGGLE = shutil.which("wiggle") is not None
 

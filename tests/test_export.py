@@ -3,16 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from qnotebook.notebook import Notebook
 from qnotebook.export import (
     DEFAULT_CSS,
-    export_page_html,
+    _preprocess_wikilinks_and_tags,
     export_notebook_html,
+    export_page_html,
     load_notebook_css,
     save_notebook_css,
-    _preprocess_wikilinks_and_tags,
 )
+from qnotebook.notebook import Notebook
 
 
 @pytest.fixture
@@ -108,7 +107,7 @@ def test_export_page_pdf_has_pdf_magic(qapp, nb, tmp_path: Path):
 
 def test_print_dialog_can_construct(qapp):
     # Verify QPrintSupport is importable and a printer+dialog can be built.
-    from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
+    from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     dlg = QPrintDialog(printer)
     assert dlg is not None

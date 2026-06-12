@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from PyQt6.QtGui import QTextCursor
-
 from qnotebook.editor import MarkdownEditor
 
 
@@ -218,7 +217,7 @@ def test_file_drop_emits_file_dropped(qapp, tmp_path):
     ed.fileDropped.connect(lambda p: got_file.append(p))
     ed.imageDropped.connect(lambda p: got_image.append(p))
     # Build a drop event with a local pdf url
-    from PyQt6.QtCore import QMimeData, QPoint, QPointF, QUrl, Qt
+    from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt, QUrl
     from PyQt6.QtGui import QDropEvent
     mock_file = tmp_path / "report.pdf"
     mock_file.write_bytes(b"%PDF-1.4\n")
@@ -241,7 +240,7 @@ def test_image_drop_still_emits_image(qapp, tmp_path):
     got_image = []
     ed.fileDropped.connect(lambda p: got_file.append(p))
     ed.imageDropped.connect(lambda p: got_image.append(p))
-    from PyQt6.QtCore import QMimeData, QPointF, QUrl, Qt
+    from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
     from PyQt6.QtGui import QDropEvent
     img = tmp_path / "x.png"
     img.write_bytes(b"\x89PNG\r\n")
@@ -268,7 +267,7 @@ def test_autosave_fires_after_interval(qapp):
     cur.movePosition(QTextCursor.MoveOperation.End)
     cur.insertText(" edited")
     # Wait longer than the interval
-    from PyQt6.QtCore import QTimer, QEventLoop
+    from PyQt6.QtCore import QEventLoop, QTimer
     loop = QEventLoop()
     QTimer.singleShot(80, loop.quit)
     loop.exec()
@@ -287,7 +286,7 @@ def test_autosave_off_suppresses(qapp):
     cur = ed.textCursor()
     cur.movePosition(QTextCursor.MoveOperation.End)
     cur.insertText(" edited")
-    from PyQt6.QtCore import QTimer, QEventLoop
+    from PyQt6.QtCore import QEventLoop, QTimer
     loop = QEventLoop()
     QTimer.singleShot(80, loop.quit)
     loop.exec()
@@ -300,8 +299,8 @@ def test_focus_out_triggers_autosave(qapp):
     ed.load_markdown("x\n")
     fired = []
     ed.autoSaveRequested.connect(lambda: fired.append(1))
-    from PyQt6.QtGui import QTextCursor, QFocusEvent
     from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QFocusEvent, QTextCursor
     cur = ed.textCursor()
     cur.movePosition(QTextCursor.MoveOperation.End)
     cur.insertText(" edited")
@@ -579,7 +578,7 @@ def test_live_reparse_unclosed_wikilink_no_anchor(qapp):
 
 def test_transclusion_renders_included_content(qapp):
     from PyQt6.QtGui import QTextDocument
-    from qnotebook.md_to_qdoc import markdown_to_qdoc, BLOCK_TRANSCLUSION
+    from qnotebook.md_to_qdoc import BLOCK_TRANSCLUSION, markdown_to_qdoc
 
     def resolver(target: str) -> str | None:
         if target == "Foo":
@@ -634,7 +633,7 @@ def test_transclusion_no_resolver_still_serializes(qapp):
 
 def test_toc_marker_generates_heading_list(qapp):
     from PyQt6.QtGui import QTextDocument
-    from qnotebook.md_to_qdoc import markdown_to_qdoc, BLOCK_TRANSCLUDED_CHILD, CHAR_WIKILINK
+    from qnotebook.md_to_qdoc import BLOCK_TRANSCLUDED_CHILD, CHAR_WIKILINK, markdown_to_qdoc
     doc = QTextDocument()
     markdown_to_qdoc("# A\n\n[[!TOC]]\n\n## B\n\n## C\n", doc)
     # TOC expanded to 3 child blocks (A, B, C).
@@ -648,8 +647,8 @@ def test_toc_marker_generates_heading_list(qapp):
 
 
 def test_toc_marker_heading_anchors_target_same_page(qapp):
-    from PyQt6.QtGui import QTextDocument, QTextCursor
-    from qnotebook.md_to_qdoc import markdown_to_qdoc, CHAR_WIKILINK
+    from PyQt6.QtGui import QTextCursor, QTextDocument
+    from qnotebook.md_to_qdoc import CHAR_WIKILINK, markdown_to_qdoc
     doc = QTextDocument()
     markdown_to_qdoc("# Top\n\n[[!TOC]]\n\n## Sub\n", doc)
     # Walk every character: at least one should have a CHAR_WIKILINK property

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtGui import QFont, QTextDocument, QTextBlock, QTextTable, QTextCursor
+from PyQt6.QtGui import QFont, QTextBlock, QTextCursor, QTextDocument, QTextTable
 
 from .md_to_qdoc import (
     BLOCK_CODE_LANG,
@@ -12,8 +12,8 @@ from .md_to_qdoc import (
     BLOCK_ORDERED_START,
     BLOCK_TASK_STATE,
     BLOCK_TOC_MARKER,
-    BLOCK_TRANSCLUSION,
     BLOCK_TRANSCLUDED_CHILD,
+    BLOCK_TRANSCLUSION,
     CHAR_CODE,
     CHAR_IMAGE_ALT,
     CHAR_WIKILINK,

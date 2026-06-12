@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QMimeData, QModelIndex, Qt
-
 from qnotebook.index import Index
 from qnotebook.notebook import Notebook
 from qnotebook.page_model import PAGE_MIME_TYPE, PageTreeModel
@@ -105,6 +104,7 @@ def test_drop_drains_pending_commit_before_move(qapp, tmp_notebook: Path):
     first, so the saved content is committed at the old path (not lost as a
     spurious deletion) before the file moves."""
     import subprocess
+
     from qnotebook import versioning
     nb = Notebook(tmp_notebook)
     idx = Index(nb)

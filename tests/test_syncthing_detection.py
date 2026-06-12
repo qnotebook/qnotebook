@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from qnotebook.sync_conflict import (
-    ConflictWatcher, parse_conflict_name, scan,
+    ConflictWatcher,
+    parse_conflict_name,
+    scan,
 )
 
 

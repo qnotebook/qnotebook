@@ -12,14 +12,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSettings, QModelIndex
+from PyQt6.QtCore import QModelIndex, QSettings, Qt
 from PyQt6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QDialogButtonBox, QFormLayout,
-    QFrame, QGroupBox, QHBoxLayout, QHeaderView, QKeySequenceEdit, QLineEdit,
-    QListWidget, QListWidgetItem, QMenu, QScrollArea, QSpinBox,
-    QStackedWidget, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QKeySequenceEdit,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QScrollArea,
+    QSpinBox,
+    QStackedWidget,
+    QStyledItemDelegate,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from . import nb_settings

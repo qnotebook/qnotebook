@@ -5,9 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from qnotebook.notebook import Notebook
 from qnotebook.index import Index
+from qnotebook.notebook import Notebook
 from qnotebook.statistics import compute_stats
 
 

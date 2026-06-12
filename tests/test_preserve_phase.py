@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qnotebook import safe_save
 from qnotebook.safe_save import LoadResult, SafeWriter, sha256_bytes
+
+from qnotebook import safe_save
 
 
 def _load(original: bytes, baseline: bytes) -> LoadResult:

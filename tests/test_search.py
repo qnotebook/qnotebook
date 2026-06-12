@@ -3,10 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from qnotebook.index import Index
 from qnotebook.notebook import Notebook
-from qnotebook.search import Search, Hit
+from qnotebook.search import Hit, Search
 
 
 def _make_nb(tmp_path: Path) -> tuple[Notebook, Index, Search]:

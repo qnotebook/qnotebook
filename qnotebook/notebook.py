@@ -14,7 +14,6 @@ from typing import Iterator
 from . import safe_save
 from . import snapshots as _snapshots
 
-
 DOTDIR = ".qnotebook"
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from PyQt6.QtCore import Qt, QPointF, QRectF
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QPen
 from PyQt6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -23,7 +23,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
 
 try:
     import networkx as nx  # type: ignore

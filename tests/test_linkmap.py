@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from PyQt6.QtCore import QSettings
-
 from qnotebook.linkmap import LinkMapDock
 from qnotebook.window import MainWindow
 
@@ -55,7 +53,7 @@ def test_linkmap_click_navigates(qapp, tmp_notebook: Path, qtbot):
 
 
 def test_force_layout_falls_back_when_no_networkx():
-    from qnotebook.linkmap import force_layout, HAS_NETWORKX
+    from qnotebook.linkmap import HAS_NETWORKX, force_layout
     pos = force_layout(["A", "B", "C"], [("A", "B"), ("B", "C")])
     assert set(pos.keys()) == {"A", "B", "C"}
     for x, y in pos.values():

@@ -6,11 +6,9 @@ import time
 from pathlib import Path
 
 import pytest
-
 from PyQt6.QtCore import QSettings
-
-from qnotebook.window import MainWindow
 from qnotebook.watchdog import PageWatcher
+from qnotebook.window import MainWindow
 
 
 @pytest.fixture(autouse=True)

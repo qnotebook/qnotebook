@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pytest
-
-from qnotebook.spell import HAS_ENCHANT, SpellHighlighter, WORD_RE
+from qnotebook.spell import HAS_ENCHANT, WORD_RE, SpellHighlighter
 
 
 def test_word_regex_finds_words():

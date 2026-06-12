@@ -18,9 +18,9 @@ plugins are imported as `qnotebook.plugins.builtin.<name>`.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.util
-import ast
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any

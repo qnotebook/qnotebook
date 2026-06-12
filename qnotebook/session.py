@@ -117,4 +117,5 @@ def _set_dock(dock, visible: bool) -> None:
 
 
 from PyQt6.QtCore import Qt as _Qt
+
 _H_ORIENT_VALUE = _Qt.Orientation.Horizontal.value

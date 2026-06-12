@@ -17,7 +17,6 @@ from typing import Optional
 
 from . import safe_save
 
-
 SNAP_DIR = ".qnotebook/snapshots"
 KEEP = 10
 TS_RE = re.compile(r"^(\d{14})\.md$")

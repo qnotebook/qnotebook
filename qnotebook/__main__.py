@@ -13,6 +13,7 @@ def main(argv: list[str] | None = None) -> int:
             return rc
         # rc == -1 → fall through to GUI
     from PyQt6.QtWidgets import QApplication
+
     from qnotebook.window import MainWindow
     app = QApplication(argv)
     app.setApplicationName("qnotebook")

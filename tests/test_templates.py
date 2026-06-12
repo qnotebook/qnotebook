@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from qnotebook.notebook import Notebook
 from qnotebook.templates import (
     ensure_builtin_templates,

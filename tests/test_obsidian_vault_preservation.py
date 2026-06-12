@@ -20,7 +20,6 @@ import pytest
 
 from qnotebook import safe_save
 
-
 FIXTURES = Path(__file__).parent / "fixtures" / "obsidian_vault"
 
 FIXTURE_FILES = sorted(p.name for p in FIXTURES.glob("*.md"))

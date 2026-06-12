@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-
 SRC = Path(__file__).parent.parent / "qnotebook"
 
 

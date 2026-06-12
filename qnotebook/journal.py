@@ -6,7 +6,7 @@ from datetime import date
 from typing import Callable
 
 from PyQt6.QtCore import QDate, Qt
-from PyQt6.QtGui import QTextCharFormat, QFont
+from PyQt6.QtGui import QFont, QTextCharFormat
 from PyQt6.QtWidgets import QCalendarWidget, QVBoxLayout, QWidget
 
 

@@ -9,7 +9,6 @@ from typing import Callable
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
-
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 

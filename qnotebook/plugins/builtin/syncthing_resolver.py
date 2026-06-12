@@ -11,8 +11,17 @@ from pathlib import Path
 
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSplitter, QTextEdit, QVBoxLayout, QWidget, QMessageBox,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ...conflict_resolver import ResolverActions

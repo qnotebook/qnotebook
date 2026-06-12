@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from qnotebook import cli, __version__
+from qnotebook import __version__, cli
 
 
 def test_version(capsys) -> None:

@@ -16,8 +16,8 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QAction, QKeySequence, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QApplication,
+    QCheckBox,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
 
 from .editor import MarkdownEditor
 from .notebook import PageRef
-from .search import Search, Hit
+from .search import Hit, Search
 
 
 def _extract_heading_section(md_text: str, heading: str) -> str:
@@ -576,6 +576,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._status_label)
 
         from PyQt6.QtWidgets import QPushButton
+
         from .sync_conflict import ConflictWatcher
         self._conflict_badge = QPushButton("")
         self._conflict_badge.setFlat(True)
@@ -912,8 +913,8 @@ class MainWindow(QMainWindow):
         self._settings.setValue("plugins_enabled", sorted(cur))
 
     def open_notebook(self, path: str) -> None:
-        from .templates import ensure_builtin_templates
         from . import locks as _locks
+        from .templates import ensure_builtin_templates
         root = Path(path)
         # Attempt to take the lock. Existing + alive lock prompts the user.
         acquired, existing = _locks.acquire(root)
@@ -1202,8 +1203,9 @@ class MainWindow(QMainWindow):
     def _new_page(self, template_name: str | None = None) -> None:
         if self.notebook is None:
             return
-        from .templates import list_templates, load_template, render_template
         from PyQt6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout
+
+        from .templates import list_templates, load_template, render_template
         dlg = QDialog(self)
         dlg.setWindowTitle("New Page")
         form = QFormLayout(dlg)
@@ -1490,7 +1492,8 @@ class MainWindow(QMainWindow):
 
     def _show_external_diff(self) -> None:
         import difflib
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QPlainTextEdit, QDialogButtonBox
+
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout
         on_disk = self.notebook.get_page(self._current_page).splitlines(keepends=True)
         in_mem = self.editor.markdown().splitlines(keepends=True)
         diff = "".join(difflib.unified_diff(
@@ -1887,7 +1890,7 @@ class MainWindow(QMainWindow):
         info = self.page_properties(page)
         if not info:
             return
-        from PyQt6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Properties: {page}")
         form = QFormLayout(dlg)
@@ -2344,8 +2347,9 @@ class MainWindow(QMainWindow):
         self._insert_image_from_path(Path(src_path))
 
     def _on_image_pasted(self, image) -> None:
-        from PyQt6.QtGui import QImage
         from datetime import datetime
+
+        from PyQt6.QtGui import QImage
         if self.notebook is None or self._current_page is None:
             return
         if not isinstance(image, QImage) or image.isNull():
@@ -2496,7 +2500,7 @@ class MainWindow(QMainWindow):
     # ---- dark mode ----
 
     def _toggle_dark_mode(self, on: bool) -> None:
-        from PyQt6.QtGui import QPalette, QColor
+        from PyQt6.QtGui import QColor, QPalette
         from PyQt6.QtWidgets import QApplication
         self._settings.setValue("dark_mode", bool(on))
         app = QApplication.instance()
@@ -2674,8 +2678,9 @@ class MainWindow(QMainWindow):
     def _edit_export_css(self) -> None:
         if self.notebook is None:
             return
-        from .export import load_notebook_css, save_notebook_css
         from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QPlainTextEdit, QVBoxLayout
+
+        from .export import load_notebook_css, save_notebook_css
         dlg = QDialog(self)
         dlg.setWindowTitle("Export CSS")
         dlg.resize(720, 540)

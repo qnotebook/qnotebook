@@ -92,8 +92,16 @@ def show_dashboard(parent, notebook, index) -> None:
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QBrush, QColor, QPen
     from PyQt6.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
-        QDialogButtonBox, QGraphicsScene, QGraphicsView, QTabWidget, QWidget,
+        QDialog,
+        QDialogButtonBox,
+        QGraphicsScene,
+        QGraphicsView,
+        QHBoxLayout,
+        QLabel,
+        QListWidget,
+        QTabWidget,
+        QVBoxLayout,
+        QWidget,
     )
     stats = compute_stats(notebook, index)
     dlg = QDialog(parent)

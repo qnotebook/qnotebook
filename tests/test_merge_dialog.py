@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
-
 from qnotebook.merge_dialog import (
-    MergeDialog, apply_choices, compute_hunks, conflict_marker_bytes,
+    MergeDialog,
+    apply_choices,
+    compute_hunks,
+    conflict_marker_bytes,
 )
 
 

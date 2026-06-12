@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 from PyQt6.QtCore import QSettings
-
-from qnotebook import nb_settings
 from qnotebook.settings_dialog import SettingsDialog
 from qnotebook.window import MainWindow
+
+from qnotebook import nb_settings
 
 
 @pytest.fixture(autouse=True)

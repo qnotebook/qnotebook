@@ -9,7 +9,6 @@ from PyQt6.QtCore import QAbstractItemModel, QMimeData, QModelIndex, Qt, pyqtSig
 
 from .notebook import Notebook, PageRef
 
-
 PAGE_MIME_TYPE = "application/x-qnotebook-page-path"
 
 

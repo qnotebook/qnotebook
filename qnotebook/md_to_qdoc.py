@@ -33,7 +33,6 @@ from PyQt6.QtGui import (
     QTextTableFormat,
 )
 
-
 # Qt User properties on blocks — all values are strings/ints for portability.
 BLOCK_KIND = QTextCharFormat.Property.UserProperty + 1  # "p" | "h" | "code" | "bq" | "hr" | "li" | "task" | "th" | "td"
 BLOCK_LEVEL = QTextCharFormat.Property.UserProperty + 2  # heading level, list depth
@@ -198,7 +197,7 @@ class _InlineStyle:
             f.setFontWeight(QFont.Weight.DemiBold)
             f.setProperty(CHAR_TAG, self.tag)
         if self.equation is not None:
-            from .equations import EQ_LATEX, EQ_DISPLAY
+            from .equations import EQ_DISPLAY, EQ_LATEX
             f.setFontFamilies(["monospace"])
             f.setBackground(QColor("#fff8dc"))
             f.setProperty(EQ_LATEX, self.equation)

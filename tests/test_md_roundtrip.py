@@ -7,12 +7,9 @@ We assert the second-generation output is a fixed point."""
 from __future__ import annotations
 
 import pytest
-
 from PyQt6.QtGui import QTextDocument
-
 from qnotebook.md_to_qdoc import markdown_to_qdoc
 from qnotebook.qdoc_to_md import qdoc_to_markdown
-
 
 SAMPLES = [
     pytest.param("# Hello\n", id="h1"),
@@ -240,7 +237,7 @@ def test_footnote_reference_and_definition_roundtrip(qapp):
 
 def test_footnote_definition_block_property_set(qapp):
     from PyQt6.QtGui import QTextDocument
-    from qnotebook.md_to_qdoc import markdown_to_qdoc, BLOCK_FOOTNOTE_DEF
+    from qnotebook.md_to_qdoc import BLOCK_FOOTNOTE_DEF, markdown_to_qdoc
     doc = QTextDocument()
     markdown_to_qdoc("[^a]: note body.\n", doc)
     block = doc.firstBlock()
@@ -252,8 +249,8 @@ def test_footnote_definition_block_property_set(qapp):
 
 
 def test_footnote_reference_char_property(qapp):
-    from PyQt6.QtGui import QTextDocument, QTextCursor
-    from qnotebook.md_to_qdoc import markdown_to_qdoc, CHAR_FOOTNOTE_REF
+    from PyQt6.QtGui import QTextCursor, QTextDocument
+    from qnotebook.md_to_qdoc import CHAR_FOOTNOTE_REF, markdown_to_qdoc
     doc = QTextDocument()
     markdown_to_qdoc("Ref [^x] here.\n", doc)
     text = doc.toPlainText()

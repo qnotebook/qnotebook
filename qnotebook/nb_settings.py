@@ -12,7 +12,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 SETTINGS_FILE = ".qnotebook/settings.json"
 
 DEFAULTS: dict[str, Any] = {

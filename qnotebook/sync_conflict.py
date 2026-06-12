@@ -15,7 +15,6 @@ from typing import Iterable
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSignal
 
-
 CONFLICT_RE = re.compile(
     r"^(?P<stem>.+)\.sync-conflict-"
     r"(?P<date>\d{8})-(?P<time>\d{6})-"
