@@ -294,9 +294,16 @@ _WIKILINK_PATTERN = (
 _TAG_PATTERN = r"(?:(?<=^)|(?<=[\s(\[]))(?P<qntag_full>#[A-Za-z][\w-]*)"
 
 
-def _parse_wikilink(inline, m, state):
-    target = m.group("wikilink_target").strip()
+def _append_wikilink_token(m, state, pipe_sentinel: str | None = None) -> int:
+    target = m.group("wikilink_target")
     alias = m.group("wikilink_alias")
+    if pipe_sentinel and pipe_sentinel in target:
+        # The block-level table plugin runs before inline parsing. Aliased
+        # wikilinks on adjacent lines otherwise look like a two-column table
+        # and are irreversibly split before this plugin sees them.
+        target, alias = target.split(pipe_sentinel, 1)
+        alias = alias.replace(pipe_sentinel, "|")
+    target = target.strip()
     display = alias.strip() if alias else target
     state.append_token({
         "type": "wikilink",
@@ -304,6 +311,10 @@ def _parse_wikilink(inline, m, state):
         "attrs": {"target": target},
     })
     return m.end()
+
+
+def _parse_wikilink(inline, m, state):
+    return _append_wikilink_token(m, state)
 
 
 def _parse_tag(inline, m, state):
@@ -318,6 +329,16 @@ def _parse_tag(inline, m, state):
 
 def _wikilink_plugin(md: mistune.Markdown) -> None:
     md.inline.register("wikilink", _WIKILINK_PATTERN, _parse_wikilink, before="link")
+
+
+def _wikilink_plugin_with_pipe_sentinel(pipe_sentinel: str):
+    def plugin(md: mistune.Markdown) -> None:
+        def parse(inline, m, state):
+            return _append_wikilink_token(m, state, pipe_sentinel)
+
+        md.inline.register("wikilink", _WIKILINK_PATTERN, parse, before="link")
+
+    return plugin
 
 
 def _tag_plugin(md: mistune.Markdown) -> None:
@@ -362,9 +383,20 @@ def _walk_inline(children: list[dict], style: _InlineStyle) -> list[tuple[str, _
             full = node.get("raw", "")
             name = (node.get("attrs") or {}).get("name", full[1:] if full.startswith("#") else full)
             out.append((full, _style_with(style, tag=name)))
-        elif ntype == "inline_math":
+        elif ntype in ("inline_math", "block_math"):
             latex = node.get("raw", "")
-            out.append((f"${latex}$", _style_with(style, equation=latex, equation_display=False)))
+            display = ntype == "block_math"
+            delim = "$$" if display else "$"
+            out.append(
+                (
+                    f"{delim}{latex}{delim}",
+                    _style_with(
+                        style,
+                        equation=latex,
+                        equation_display=display,
+                    ),
+                )
+            )
         elif ntype in ("softbreak", "linebreak"):
             out.append(("\n", style))
         elif ntype in ("inline_html", "block_html"):
@@ -647,6 +679,7 @@ def _render_table(r: _Renderer, node: dict) -> None:
 
 _TOC_SENTINEL = "QNOTEBOOKTOCMARKERLINE"
 _TRANSCLUDE_SENTINEL_PREFIX = "QNOTEBOOKTRANSCLUDELINE"
+_WIKILINK_PIPE_SENTINEL_BASE = "QNOTEBOOKWIKILINKPIPE"
 
 
 def _preprocess_transclusions(md_text: str) -> tuple[str, list[str]]:
@@ -692,14 +725,92 @@ def _preprocess_toc_markers(md_text: str) -> str:
     return out
 
 
+def _preprocess_wikilink_pipes(md_text: str) -> tuple[str, str | None]:
+    """Hide wikilink alias pipes from Mistune's block-level table parser.
+
+    The table plugin sees raw blocks before the wikilink inline plugin. Two
+    adjacent ``[[Target|alias]]`` lines therefore satisfy its permissive
+    header/separator grammar and become a table. Replace pipes only inside
+    real, unescaped wikilinks outside code spans/fences with a document-unique
+    token. The sentinel-aware inline plugin restores their meaning later.
+    """
+    if "[[" not in md_text or "|" not in md_text:
+        return md_text, None
+
+    sentinel = _WIKILINK_PIPE_SENTINEL_BASE
+    suffix = 0
+    while sentinel in md_text:
+        suffix += 1
+        sentinel = f"{_WIKILINK_PIPE_SENTINEL_BASE}{suffix}"
+
+    changed = False
+    in_fence = False
+    out_lines: list[str] = []
+    for line in md_text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+
+        out: list[str] = []
+        pos = 0
+        code_ticks = 0
+        while pos < len(line):
+            if line[pos] == "`":
+                end = pos + 1
+                while end < len(line) and line[end] == "`":
+                    end += 1
+                run = end - pos
+                if code_ticks == 0:
+                    code_ticks = run
+                elif run == code_ticks:
+                    code_ticks = 0
+                out.append(line[pos:end])
+                pos = end
+                continue
+
+            if code_ticks == 0 and line.startswith("[[", pos):
+                # An odd backslash run escapes the opening brackets.
+                backslashes = 0
+                check = pos - 1
+                while check >= 0 and line[check] == "\\":
+                    backslashes += 1
+                    check -= 1
+                end = line.find("]]", pos + 2)
+                if backslashes % 2 == 0 and end >= 0:
+                    raw = line[pos:end + 2]
+                    if "|" in raw:
+                        raw = raw.replace("|", sentinel)
+                        changed = True
+                    out.append(raw)
+                    pos = end + 2
+                    continue
+
+            out.append(line[pos])
+            pos += 1
+        out_lines.append("".join(out))
+
+    if not changed:
+        return md_text, None
+    return "".join(out_lines), sentinel
+
+
 # --------------------------------------------------------------------
 # Public entry
 # --------------------------------------------------------------------
 
 
-def _build_parser() -> mistune.Markdown:
+def _build_parser(wikilink_pipe_sentinel: str | None = None) -> mistune.Markdown:
+    wikilink = (
+        _wikilink_plugin_with_pipe_sentinel(wikilink_pipe_sentinel)
+        if wikilink_pipe_sentinel else _wikilink_plugin
+    )
     plugins = ["table", "strikethrough", "task_lists", "math",
-               _wikilink_plugin, _tag_plugin]
+               wikilink, _tag_plugin]
     return mistune.create_markdown(renderer=None, plugins=plugins)
 
 
@@ -729,8 +840,9 @@ def markdown_to_qdoc(
 
     md_text = _preprocess_toc_markers(md_text or "")
     md_text, transclusion_targets = _preprocess_transclusions(md_text)
+    md_text, wikilink_pipe_sentinel = _preprocess_wikilink_pipes(md_text)
 
-    parser = _build_parser()
+    parser = _build_parser(wikilink_pipe_sentinel)
     ast = parser(md_text or "")
 
     r = _Renderer(doc, base_path=base_path)

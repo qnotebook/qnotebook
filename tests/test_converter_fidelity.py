@@ -227,6 +227,14 @@ class TestFirstPassWikilinks:
         out = _gen1(md)
         assert_words_preserved(md, out, label="wikilink-alias ")
 
+    def test_adjacent_aliased_wikilinks_do_not_become_a_table(self, qapp):
+        md = "[[Target|alias]]\n[[Target|alias]]\n"
+        assert _gen1(md) == "[[Target|alias]]\n\n[[Target|alias]]\n"
+
+    def test_aliased_wikilink_inside_real_table_stays_a_wikilink(self, qapp):
+        md = "| Link |\n| --- |\n| [[Target|alias]] |\n"
+        assert "[[Target|alias]]" in _gen1(md)
+
 
 class TestFirstPassTables:
     def test_minimal_table_structure_preserved(self, qapp):
