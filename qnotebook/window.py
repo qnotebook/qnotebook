@@ -889,27 +889,57 @@ class MainWindow(QMainWindow):
         for info in infos:
             act = QAction(f"{info.name}", self)
             act.setCheckable(True)
-            act.setChecked(info.key in enabled)
+            token = plugins_mod.enabled_token(info)
+            act.setChecked(token is not None and token in enabled)
             act.setToolTip(info.description)
             act.toggled.connect(
-                lambda checked, key=info.key: self._toggle_plugin(key, checked)
+                lambda checked, key=info.key, action=act: self._toggle_plugin(
+                    key, checked, action
+                )
             )
             self.m_plugins.addAction(act)
         plugins_mod.setup_enabled(self, infos, enabled)
 
-    def _toggle_plugin(self, key: str, enabled: bool) -> None:
+    def _confirm_enable_user_plugin(self, info) -> bool:
+        """Confirm before enabling a user plugin — enabling executes its code."""
+        path = str(info.path) if info.path is not None else "(unknown)"
+        resp = QMessageBox.question(
+            self,
+            "Enable notebook plugin?",
+            f"“{info.name}” is a plugin bundled with this notebook.\n"
+            f"Enabling it runs its Python code with your privileges every time "
+            f"this notebook opens.\n\nOnly enable plugins from notebooks you trust.\n\n"
+            f"{path}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return resp == QMessageBox.StandardButton.Yes
+
+    def _toggle_plugin(self, key: str, enabled: bool, action=None) -> None:
+        from . import plugins as plugins_mod
+        info = next(
+            (i for i in getattr(self, "_plugin_infos", []) if i.key == key), None
+        )
+        token = plugins_mod.enabled_token(info) if info is not None else None
+        if token is None:
+            # Not discoverable / not hashable → cannot be trusted; refuse silently.
+            return
         raw = self._settings.value("plugins_enabled", [], type=list) or []
         cur = set(str(x) for x in raw)
         if enabled:
-            cur.add(key)
-            # Activate immediately if discovered
-            for info in getattr(self, "_plugin_infos", []):
-                if info.key == key:
-                    from . import plugins as plugins_mod
-                    plugins_mod.setup_enabled(self, [info], {key})
-                    break
+            # User plugins execute arbitrary code — gate the explicit opt-in.
+            if info.source == "user" and not self._confirm_enable_user_plugin(info):
+                # Revert this exact action's check without recursing back in.
+                # Match by identity, not display name (names can collide).
+                if action is not None:
+                    action.blockSignals(True)
+                    action.setChecked(False)
+                    action.blockSignals(False)
+                return
+            cur.add(token)
+            plugins_mod.setup_enabled(self, [info], {token})
         else:
-            cur.discard(key)
+            cur.discard(token)
         self._settings.setValue("plugins_enabled", sorted(cur))
 
     def open_notebook(self, path: str) -> None:
